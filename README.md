@@ -63,15 +63,15 @@ models not listed in `MODEL_OPTIONS`.
 
 ## Model Pricing
 
-`MODEL_PRICING_USD_PER_MILLION` controls dashboard pricing display and session
-cost tracking. Costs are USD per million tokens:
+`MODEL_PRICING_USD_PER_1K` controls dashboard pricing display and session
+cost tracking. Costs are USD per 1,000 tokens:
 
 ```env
-MODEL_PRICING_USD_PER_MILLION=gpt-5.4=0/0,gpt-5.4-mini=0/0,gpt-5.4-nano=0/0,gpt-5.2=0/0,gpt-5.1=0/0,gpt-5=0/0,gpt-5-mini=0/0,gpt-5-nano=0/0
+MODEL_PRICING_USD_PER_1K=gpt-5.4=0/0,gpt-5.4-mini=0/0,gpt-5.4-nano=0/0,gpt-5.2=0/0,gpt-5.1=0/0,gpt-5=0/0,gpt-5-mini=0/0,gpt-5-nano=0/0
 ```
 
-Each value is `input_cost/output_cost`. For example, `gpt-5.4=2.50/10.00`
-means $2.50 per million input tokens and $10.00 per million output tokens.
+Each value is `input_cost/output_cost`. For example, `gpt-5.4=0.0025/0.0100`
+means $0.0025 per 1,000 input tokens and $0.0100 per 1,000 output tokens.
 
 ## Token Limit Handling
 
@@ -98,7 +98,7 @@ from falling back to low defaults such as 400 output tokens.
 - `TARGET_ENDPOINT`
 - `OAUTH_TOKEN_ENDPOINT`, `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_SCOPE`
 - `TARGET_API_KEY` or `OPENAI_API_KEY`
-- `MODEL_OPTIONS`, `MODEL_MAPPING`, `MODEL_PRICING_USD_PER_MILLION`
+- `MODEL_OPTIONS`, `MODEL_MAPPING`, `MODEL_PRICING_USD_PER_1K`
 - `DEFAULT_MODEL`, `STRICT_MODEL_ALLOWLIST`
 - `DEFAULT_MAX_COMPLETION_TOKENS`, `INJECT_DEFAULT_MAX_COMPLETION_TOKENS`
 - `COMPLETION_TOKEN_LIMIT_FIELD`, `CONVERT_MAX_TOKENS_TO_MAX_COMPLETION_TOKENS`
@@ -111,7 +111,7 @@ from falling back to low defaults such as 400 output tokens.
 2. Run `cp src/.env.example src/.env`.
 3. Copy over the shared endpoint/auth values from `cc-launcher/src/.env`.
 4. Fill in the right-hand side of each `MODEL_MAPPING` entry with the internal model names.
-5. Fill in `MODEL_PRICING_USD_PER_MILLION` with input/output costs for dashboard tracking.
+5. Fill in `MODEL_PRICING_USD_PER_1K` with input/output costs for dashboard tracking.
 6. Run `./run.sh`.
 7. In Kilo Code, configure an OpenAI-compatible custom provider:
    - Base URL: `http://localhost:<PROXY_PORT>/v1`

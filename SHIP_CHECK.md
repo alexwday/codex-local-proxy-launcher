@@ -15,7 +15,7 @@ Checked June 12, 2026.
 Implementation coverage:
 
 - `GET /v1/models` returns OpenAI-shaped model objects from `MODEL_OPTIONS`.
-- The dashboard shows Kilo-facing models, upstream mappings, and configured per-million-token pricing.
+- The dashboard shows Kilo-facing models, upstream mappings, and configured per-1K-token pricing.
 - Recent dashboard calls expand to show sanitized request/response details and inline error messages.
 - The proxy accepts either `model` or `provider/model` and maps to upstream with `MODEL_MAPPING`.
 - `max_tokens` is converted to `max_completion_tokens` by default.
@@ -48,6 +48,6 @@ Then fill in:
 
 - `MODEL_OPTIONS`
 - `MODEL_MAPPING`
-- `MODEL_PRICING_USD_PER_MILLION`
+- `MODEL_PRICING_USD_PER_1K`
 - `DEFAULT_MODEL`
 - `DEFAULT_MAX_COMPLETION_TOKENS`

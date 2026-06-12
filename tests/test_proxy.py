@@ -83,7 +83,8 @@ class ProxyTestCase(unittest.TestCase):
                 "TARGET_ENDPOINT": "https://internal.example.test/v1",
                 "MODEL_OPTIONS": "kilo-gpt,kilo-mini",
                 "MODEL_MAPPING": "kilo-gpt=internal-gpt,kilo-mini=internal-mini",
-                "MODEL_PRICING_USD_PER_MILLION": "kilo-gpt=1000/2000,kilo-mini=100/200",
+                "MODEL_PRICING_USD_PER_1K": "kilo-gpt=1/2,kilo-mini=0.1/0.2",
+                "MODEL_PRICING_USD_PER_MILLION": "",
                 "DEFAULT_MODEL": "kilo-gpt",
                 "DEFAULT_MAX_COMPLETION_TOKENS": "2048",
                 "USE_PLACEHOLDER_MODE": "false",
@@ -163,8 +164,8 @@ class ProxyTestCase(unittest.TestCase):
         self.assertEqual(
             self.config.model_pricing,
             {
-                "kilo-gpt": {"input": 1000.0, "output": 2000.0},
-                "kilo-mini": {"input": 100.0, "output": 200.0},
+                "kilo-gpt": {"input": 1.0, "output": 2.0},
+                "kilo-mini": {"input": 0.1, "output": 0.2},
             },
         )
         self.assertEqual(self.config.calculate_cost("kilo-gpt", 1000, 2000), 5.0)
@@ -175,11 +176,27 @@ class ProxyTestCase(unittest.TestCase):
             {
                 "model": "kilo-gpt",
                 "target_model": "internal-gpt",
-                "input_cost_per_million": 1000.0,
-                "output_cost_per_million": 2000.0,
+                "input_cost_per_1k": 1.0,
+                "output_cost_per_1k": 2.0,
                 "configured": True,
             },
         )
+
+    def test_legacy_per_million_pricing_is_converted_to_per_1k(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MODEL_OPTIONS": "kilo-gpt",
+                "MODEL_MAPPING": "kilo-gpt=internal-gpt",
+                "MODEL_PRICING_USD_PER_1K": "",
+                "MODEL_PRICING_USD_PER_MILLION": "kilo-gpt=1000/2000",
+            },
+            clear=False,
+        ):
+            config = Config()
+
+        self.assertEqual(config.model_pricing, {"kilo-gpt": {"input": 1.0, "output": 2.0}})
+        self.assertAlmostEqual(config.calculate_cost("kilo-gpt", 7, 3), 0.013)
 
     def test_kilo_max_tokens_is_converted_to_max_completion_tokens(self):
         fake_client = _FakeOpenAIClient(
@@ -261,6 +278,7 @@ class ProxyTestCase(unittest.TestCase):
                 "OPENAI_MODEL_OPTIONS": "",
                 "KILO_MODEL_OPTIONS": "",
                 "MODEL_MAPPING": "",
+                "MODEL_PRICING_USD_PER_1K": "",
                 "MODEL_PRICING_USD_PER_MILLION": "",
                 "DEFAULT_MODEL": "",
             },

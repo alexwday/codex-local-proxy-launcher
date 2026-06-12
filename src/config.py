@@ -38,12 +38,12 @@ def _parse_model_mapping(mapping_str: str) -> dict[str, str]:
     return mapping
 
 
-def _parse_model_pricing(pricing_str: str) -> dict[str, dict[str, float]]:
+def _parse_model_pricing(pricing_str: str, env_name: str = "MODEL_PRICING_USD_PER_1K") -> dict[str, dict[str, float]]:
     """
     Parse model pricing from env.
 
-    Format: model=input_per_1m/output_per_1m,model2=input_per_1m/output_per_1m
-    Costs are USD per million tokens.
+    Format: model=input_per_1k/output_per_1k,model2=input_per_1k/output_per_1k
+    Costs are USD per 1,000 tokens.
     """
     pricing: dict[str, dict[str, float]] = {}
     for raw_pair in (pricing_str or "").split(","):
@@ -51,7 +51,7 @@ def _parse_model_pricing(pricing_str: str) -> dict[str, dict[str, float]]:
         if not pair:
             continue
         if "=" not in pair:
-            logger.warning("Ignoring invalid MODEL_PRICING_USD_PER_MILLION entry %r; expected model=input/output", pair)
+            logger.warning("Ignoring invalid %s entry %r; expected model=input/output", env_name, pair)
             continue
 
         model, raw_costs = pair.split("=", 1)
@@ -82,6 +82,17 @@ def _parse_model_pricing(pricing_str: str) -> dict[str, dict[str, float]]:
         }
 
     return pricing
+
+
+def _convert_pricing_per_million_to_1k(pricing: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
+    """Convert legacy USD-per-million-token pricing to USD-per-1K-token pricing."""
+    return {
+        model: {
+            "input": costs["input"] / 1000,
+            "output": costs["output"] / 1000,
+        }
+        for model, costs in pricing.items()
+    }
 
 
 def _parse_bool(name: str, default: str = "false") -> bool:
@@ -160,7 +171,24 @@ class Config:
 
         # Kilo-facing model configuration.
         self.model_mapping = _parse_model_mapping(os.getenv("MODEL_MAPPING", ""))
-        self.model_pricing = _parse_model_pricing(os.getenv("MODEL_PRICING_USD_PER_MILLION", ""))
+        pricing_per_1k = os.getenv("MODEL_PRICING_USD_PER_1K", "")
+        legacy_pricing_per_million = os.getenv("MODEL_PRICING_USD_PER_MILLION", "")
+        if pricing_per_1k.strip():
+            self.model_pricing = _parse_model_pricing(pricing_per_1k, "MODEL_PRICING_USD_PER_1K")
+            self.model_pricing_unit = "usd_per_1k_tokens"
+        elif legacy_pricing_per_million.strip():
+            logger.warning(
+                "MODEL_PRICING_USD_PER_MILLION is deprecated; use MODEL_PRICING_USD_PER_1K instead"
+            )
+            legacy_pricing = _parse_model_pricing(
+                legacy_pricing_per_million,
+                "MODEL_PRICING_USD_PER_MILLION",
+            )
+            self.model_pricing = _convert_pricing_per_million_to_1k(legacy_pricing)
+            self.model_pricing_unit = "usd_per_1k_tokens"
+        else:
+            self.model_pricing = {}
+            self.model_pricing_unit = "usd_per_1k_tokens"
         configured_models = (
             os.getenv("MODEL_OPTIONS")
             or os.getenv("OPENAI_MODEL_OPTIONS")
@@ -283,13 +311,13 @@ class Config:
             request_payload["max_tokens"] = self.default_max_completion_tokens
 
     def calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
-        """Calculate request cost from configured USD-per-million token pricing."""
+        """Calculate request cost from configured USD-per-1K-token pricing."""
         pricing = self.model_pricing.get(model)
         if not pricing:
             return 0.0
 
-        input_cost = (input_tokens / 1_000_000) * pricing["input"]
-        output_cost = (output_tokens / 1_000_000) * pricing["output"]
+        input_cost = (input_tokens / 1_000) * pricing["input"]
+        output_cost = (output_tokens / 1_000) * pricing["output"]
         return input_cost + output_cost
 
     def get_model_pricing_table(self) -> list[dict[str, Any]]:
@@ -301,8 +329,8 @@ class Config:
                 {
                     "model": model,
                     "target_model": self.model_mapping.get(model, model),
-                    "input_cost_per_million": pricing.get("input"),
-                    "output_cost_per_million": pricing.get("output"),
+                    "input_cost_per_1k": pricing.get("input"),
+                    "output_cost_per_1k": pricing.get("output"),
                     "configured": model in self.model_pricing,
                 }
             )
@@ -385,6 +413,7 @@ class Config:
             "model_options": self.get_public_model_names(),
             "model_mapping": self.model_mapping,
             "model_pricing": self.model_pricing,
+            "model_pricing_unit": self.model_pricing_unit,
             "model_pricing_table": self.get_model_pricing_table(),
             "default_model": self.default_model,
             "strict_model_allowlist": self.strict_model_allowlist,

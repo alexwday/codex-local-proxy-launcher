@@ -806,8 +806,8 @@
                         <tr>
                             <th>Kilo Model</th>
                             <th>Internal Model</th>
-                            <th>Input / 1M</th>
-                            <th>Output / 1M</th>
+                            <th>Input / 1K</th>
+                            <th>Output / 1K</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -815,8 +815,8 @@
                             <tr>
                                 <td class="mono">${escapeHtml(row.model)}</td>
                                 <td class="mono">${escapeHtml(row.target_model)}</td>
-                                <td class="mono">${fmtPrice(row.input_cost_per_million)}</td>
-                                <td class="mono">${fmtPrice(row.output_cost_per_million)}</td>
+                                <td class="mono">${fmtPrice(row.input_cost_per_1k)}</td>
+                                <td class="mono">${fmtPrice(row.output_cost_per_1k)}</td>
                             </tr>
                         `).join("")}
                     </tbody>
