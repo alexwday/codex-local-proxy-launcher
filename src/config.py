@@ -38,6 +38,52 @@ def _parse_model_mapping(mapping_str: str) -> dict[str, str]:
     return mapping
 
 
+def _parse_model_pricing(pricing_str: str) -> dict[str, dict[str, float]]:
+    """
+    Parse model pricing from env.
+
+    Format: model=input_per_1m/output_per_1m,model2=input_per_1m/output_per_1m
+    Costs are USD per million tokens.
+    """
+    pricing: dict[str, dict[str, float]] = {}
+    for raw_pair in (pricing_str or "").split(","):
+        pair = raw_pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            logger.warning("Ignoring invalid MODEL_PRICING_USD_PER_MILLION entry %r; expected model=input/output", pair)
+            continue
+
+        model, raw_costs = pair.split("=", 1)
+        model = model.strip()
+        raw_costs = raw_costs.strip()
+        if not model or not raw_costs:
+            continue
+
+        if "/" not in raw_costs:
+            logger.warning("Ignoring invalid pricing for %r; expected input/output", model)
+            continue
+
+        raw_input, raw_output = raw_costs.split("/", 1)
+        try:
+            input_cost = float(raw_input.strip())
+            output_cost = float(raw_output.strip())
+        except ValueError:
+            logger.warning("Ignoring invalid pricing for %r; costs must be numbers", model)
+            continue
+
+        if input_cost < 0 or output_cost < 0:
+            logger.warning("Ignoring invalid pricing for %r; costs must be non-negative", model)
+            continue
+
+        pricing[model] = {
+            "input": input_cost,
+            "output": output_cost,
+        }
+
+    return pricing
+
+
 def _parse_bool(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -114,6 +160,7 @@ class Config:
 
         # Kilo-facing model configuration.
         self.model_mapping = _parse_model_mapping(os.getenv("MODEL_MAPPING", ""))
+        self.model_pricing = _parse_model_pricing(os.getenv("MODEL_PRICING_USD_PER_MILLION", ""))
         configured_models = (
             os.getenv("MODEL_OPTIONS")
             or os.getenv("OPENAI_MODEL_OPTIONS")
@@ -139,8 +186,8 @@ class Config:
         self.model_context_window = _parse_int("MODEL_CONTEXT_WINDOW", "128000")
         self.model_output_tokens = _parse_int("MODEL_OUTPUT_TOKENS", str(self.default_max_completion_tokens))
         self.model_supports_tools = _parse_bool("MODEL_SUPPORTS_TOOLS", "true")
-        self.model_supports_reasoning = _parse_bool("MODEL_SUPPORTS_REASONING", "false")
-        self.model_supports_temperature = _parse_bool("MODEL_SUPPORTS_TEMPERATURE", "true")
+        self.model_supports_reasoning = _parse_bool("MODEL_SUPPORTS_REASONING", "true")
+        self.model_supports_temperature = _parse_bool("MODEL_SUPPORTS_TEMPERATURE", "false")
 
         # OAuth settings.
         self.oauth_token_endpoint = os.getenv("OAUTH_TOKEN_ENDPOINT")
@@ -236,8 +283,30 @@ class Config:
             request_payload["max_tokens"] = self.default_max_completion_tokens
 
     def calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
-        """Cost tracking is intentionally disabled unless a later pricing map is added."""
-        return 0.0
+        """Calculate request cost from configured USD-per-million token pricing."""
+        pricing = self.model_pricing.get(model)
+        if not pricing:
+            return 0.0
+
+        input_cost = (input_tokens / 1_000_000) * pricing["input"]
+        output_cost = (output_tokens / 1_000_000) * pricing["output"]
+        return input_cost + output_cost
+
+    def get_model_pricing_table(self) -> list[dict[str, Any]]:
+        """Return model pricing and mapping rows for dashboard display."""
+        rows = []
+        for model in self.model_options:
+            pricing = self.model_pricing.get(model, {})
+            rows.append(
+                {
+                    "model": model,
+                    "target_model": self.model_mapping.get(model, model),
+                    "input_cost_per_million": pricing.get("input"),
+                    "output_cost_per_million": pricing.get("output"),
+                    "configured": model in self.model_pricing,
+                }
+            )
+        return rows
 
     def is_oauth_configured(self) -> bool:
         """Check if OAuth client-credentials auth is configured for upstream."""
@@ -315,6 +384,8 @@ class Config:
             "duplicate_request_ttl_seconds": self.duplicate_request_ttl_seconds,
             "model_options": self.get_public_model_names(),
             "model_mapping": self.model_mapping,
+            "model_pricing": self.model_pricing,
+            "model_pricing_table": self.get_model_pricing_table(),
             "default_model": self.default_model,
             "strict_model_allowlist": self.strict_model_allowlist,
             "default_max_completion_tokens": self.default_max_completion_tokens,

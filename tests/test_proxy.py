@@ -83,6 +83,7 @@ class ProxyTestCase(unittest.TestCase):
                 "TARGET_ENDPOINT": "https://internal.example.test/v1",
                 "MODEL_OPTIONS": "kilo-gpt,kilo-mini",
                 "MODEL_MAPPING": "kilo-gpt=internal-gpt,kilo-mini=internal-mini",
+                "MODEL_PRICING_USD_PER_MILLION": "kilo-gpt=1000/2000,kilo-mini=100/200",
                 "DEFAULT_MODEL": "kilo-gpt",
                 "DEFAULT_MAX_COMPLETION_TOKENS": "2048",
                 "USE_PLACEHOLDER_MODE": "false",
@@ -156,6 +157,29 @@ class ProxyTestCase(unittest.TestCase):
         usage = self.app.config["LOG_MANAGER"].get_usage_stats()
         self.assertEqual(usage["total_input_tokens"], 7)
         self.assertEqual(usage["total_output_tokens"], 3)
+        self.assertEqual(usage["total_cost_usd"], 0.013)
+
+    def test_model_pricing_table_and_cost_calculation(self):
+        self.assertEqual(
+            self.config.model_pricing,
+            {
+                "kilo-gpt": {"input": 1000.0, "output": 2000.0},
+                "kilo-mini": {"input": 100.0, "output": 200.0},
+            },
+        )
+        self.assertEqual(self.config.calculate_cost("kilo-gpt", 1000, 2000), 5.0)
+
+        table = self.config.get_model_pricing_table()
+        self.assertEqual(
+            table[0],
+            {
+                "model": "kilo-gpt",
+                "target_model": "internal-gpt",
+                "input_cost_per_million": 1000.0,
+                "output_cost_per_million": 2000.0,
+                "configured": True,
+            },
+        )
 
     def test_kilo_max_tokens_is_converted_to_max_completion_tokens(self):
         fake_client = _FakeOpenAIClient(
@@ -237,6 +261,7 @@ class ProxyTestCase(unittest.TestCase):
                 "OPENAI_MODEL_OPTIONS": "",
                 "KILO_MODEL_OPTIONS": "",
                 "MODEL_MAPPING": "",
+                "MODEL_PRICING_USD_PER_MILLION": "",
                 "DEFAULT_MODEL": "",
             },
             clear=False,
@@ -256,6 +281,8 @@ class ProxyTestCase(unittest.TestCase):
                 "gpt-5-nano",
             ],
         )
+        self.assertTrue(config.model_supports_reasoning)
+        self.assertFalse(config.model_supports_temperature)
 
     def test_duplicate_guard_blocks_identical_inflight_requests(self):
         body = {
@@ -407,6 +434,13 @@ class ProxyTestCase(unittest.TestCase):
 
         models_response = self.client.get("/api/models")
         self.assertEqual(models_response.status_code, 200)
+
+        config_response = self.client.get("/api/config")
+        self.assertEqual(config_response.status_code, 200)
+        config_payload = config_response.get_json()
+        self.assertIn("model_pricing_table", config_payload)
+        self.assertEqual(config_payload["model_pricing_table"][0]["model"], "kilo-gpt")
+        self.assertNotIn("kiloConfigJson", config_payload)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,6 @@
 """Dashboard API endpoints for kilo-launcher."""
 
 import hmac
-import json
 from functools import wraps
 
 from flask import Blueprint, jsonify, request, session
@@ -88,7 +87,6 @@ def get_configuration():
             "openaiBaseUrl": config.get_openai_base_url(),
             "accessTokenPreview": _redact_token(config.proxy_access_token),
             "kiloProxyApiKeyExport": "export KILO_PROXY_API_KEY='<proxy token from startup banner>'",
-            "kiloConfigJson": json.dumps(config.get_kilo_config_snippet(), indent=2),
         }
     )
     return jsonify(config_dict)
@@ -121,6 +119,8 @@ def get_models():
             "models": config.get_public_model_names(),
             "defaultModel": config.default_model,
             "mapping": config.model_mapping,
+            "pricing": config.model_pricing,
+            "pricingTable": config.get_model_pricing_table(),
             "strictAllowlist": config.strict_model_allowlist,
         }
     )

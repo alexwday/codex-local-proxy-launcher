@@ -170,25 +170,6 @@
             white-space: nowrap;
         }
 
-        .model-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-
-        .pill {
-            max-width: 100%;
-            overflow: hidden;
-            padding: 4px 8px;
-            border-radius: 999px;
-            background: var(--accent-light);
-            color: var(--accent);
-            font-family: var(--mono);
-            font-size: 11px;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
         .stats {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -214,22 +195,46 @@
 
         .span-2 { grid-column: span 2; }
 
-        pre {
-            margin: 0;
-            max-height: 300px;
-            overflow: auto;
-            padding: 12px;
-            border-radius: 8px;
-            background: #111827;
-            color: #e5e7eb;
-            font-family: var(--mono);
-            font-size: 11px;
-            line-height: 1.55;
-            white-space: pre;
-        }
-
         .wide {
             margin-bottom: 14px;
+        }
+
+        .table-wrap {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        th {
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 700;
+            text-align: left;
+            text-transform: uppercase;
+        }
+
+        th,
+        td {
+            padding: 9px 10px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+
+        tr:last-child td {
+            border-bottom: 0;
+        }
+
+        td.mono {
+            font-family: var(--mono);
+            font-size: 11px;
+        }
+
+        .muted {
+            color: var(--muted);
         }
 
         .actions {
@@ -349,7 +354,6 @@
             </div>
             <div class="actions">
                 <button onclick="refreshAll()">Refresh</button>
-                <button class="primary" onclick="copyConfig()">Copy kilo.jsonc</button>
                 <span class="status">Active</span>
             </div>
         </header>
@@ -424,25 +428,20 @@
                         <div class="stat-label">Output Tokens</div>
                         <div class="stat-value" id="outputTokens">0</div>
                     </div>
+                    <div class="stat span-2">
+                        <div class="stat-label">Estimated Session Cost</div>
+                        <div class="stat-value" id="totalCost">$0.0000</div>
+                    </div>
                 </div>
             </div>
         </section>
 
         <section class="panel wide">
             <div class="panel-header">
-                <div class="panel-title">Models</div>
+                <div class="panel-title">Models & Pricing</div>
             </div>
             <div class="panel-body">
-                <div class="model-list" id="modelList"></div>
-            </div>
-        </section>
-
-        <section class="panel wide">
-            <div class="panel-header">
-                <div class="panel-title">kilo.jsonc</div>
-            </div>
-            <div class="panel-body">
-                <pre id="kiloConfig">{}</pre>
+                <div class="table-wrap" id="modelPricingTable"></div>
             </div>
         </section>
 
@@ -456,14 +455,30 @@
     </div>
 
     <script>
-        let lastConfig = {};
-
         function text(id, value) {
             document.getElementById(id).textContent = value ?? "-";
         }
 
+        function escapeHtml(value) {
+            return String(value ?? "")
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#39;");
+        }
+
         function fmtNumber(value) {
             return Number(value || 0).toLocaleString();
+        }
+
+        function fmtCurrency(value) {
+            return `$${Number(value || 0).toFixed(4)}`;
+        }
+
+        function fmtPrice(value) {
+            if (value === null || value === undefined) return '<span class="muted">not set</span>';
+            return `$${Number(value).toFixed(4)}`;
         }
 
         function fmtTime(timestamp) {
@@ -482,7 +497,6 @@
 
         async function loadConfig() {
             const config = await fetchJson("/api/config");
-            lastConfig = config;
             text("baseUrl", config.openaiBaseUrl);
             text("apiKey", config.accessTokenPreview);
             text("modelsUrl", config.models_url || config.modelsUrl);
@@ -495,22 +509,34 @@
             text("authType", auth);
             text("sslState", config.ssl_enabled ? "enabled" : "disabled");
 
-            const modelList = document.getElementById("modelList");
-            modelList.innerHTML = "";
-            (config.model_options || []).forEach((model) => {
-                const pill = document.createElement("span");
-                const mapped = config.model_mapping && config.model_mapping[model]
-                    ? `${model} -> ${config.model_mapping[model]}`
-                    : model;
-                pill.className = "pill";
-                pill.textContent = mapped;
-                modelList.appendChild(pill);
-            });
-            if (!modelList.children.length) {
-                modelList.innerHTML = '<div class="empty">No models configured</div>';
+            const table = document.getElementById("modelPricingTable");
+            const rows = config.model_pricing_table || [];
+            if (!rows.length) {
+                table.innerHTML = '<div class="empty">No models configured</div>';
+                return;
             }
-
-            text("kiloConfig", config.kiloConfigJson || "{}");
+            table.innerHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Kilo Model</th>
+                            <th>Internal Model</th>
+                            <th>Input / 1M</th>
+                            <th>Output / 1M</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows.map((row) => `
+                            <tr>
+                                <td class="mono">${escapeHtml(row.model)}</td>
+                                <td class="mono">${escapeHtml(row.target_model)}</td>
+                                <td class="mono">${fmtPrice(row.input_cost_per_million)}</td>
+                                <td class="mono">${fmtPrice(row.output_cost_per_million)}</td>
+                            </tr>
+                        `).join("")}
+                    </tbody>
+                </table>
+            `;
         }
 
         async function loadUsage() {
@@ -519,6 +545,7 @@
             text("successRate", `${usage.success_rate}%`);
             text("inputTokens", fmtNumber(usage.total_input_tokens));
             text("outputTokens", fmtNumber(usage.total_output_tokens));
+            text("totalCost", fmtCurrency(usage.total_cost_usd));
         }
 
         async function loadLogs() {
@@ -554,11 +581,6 @@
         async function clearLogs() {
             await fetchJson("/api/logs", { method: "DELETE" });
             await loadLogs();
-        }
-
-        async function copyConfig() {
-            const value = lastConfig.kiloConfigJson || document.getElementById("kiloConfig").textContent;
-            await navigator.clipboard.writeText(value);
         }
 
         refreshAll();
