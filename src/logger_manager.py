@@ -82,6 +82,7 @@ class LoggerManager:
             'duration_ms': duration_ms,
             'request': self._sanitize_for_log(request_data),
             'response': self._sanitize_for_log(response_data),
+            'error_message': self._extract_error_message(response_data) if status >= 400 else '',
             'input_tokens': input_tokens,
             'output_tokens': output_tokens,
             'cost_usd': cost_usd,
@@ -148,6 +149,31 @@ class LoggerManager:
         """Reset usage statistics."""
         self.usage = UsageStats()
         logger.info("Usage statistics reset")
+
+    def _extract_error_message(self, data: Optional[Dict]) -> str:
+        """Extract a concise error message from common API error shapes."""
+        if data is None:
+            return ""
+        if isinstance(data, str):
+            return data
+        if not isinstance(data, dict):
+            return ""
+
+        error = data.get('error')
+        if isinstance(error, str):
+            return error
+        if isinstance(error, dict):
+            for key in ('message', 'detail', 'error_description', 'code'):
+                value = error.get(key)
+                if value:
+                    return str(value)
+
+        for key in ('message', 'detail', 'error_description'):
+            value = data.get(key)
+            if value:
+                return str(value)
+
+        return ""
 
     def _sanitize_for_log(self, data: Optional[Dict]) -> Optional[Dict]:
         """Sanitize data for logging (truncate large content)."""

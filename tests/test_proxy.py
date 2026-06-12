@@ -390,6 +390,24 @@ class ProxyTestCase(unittest.TestCase):
         self.assertEqual(stats["total_tokens"], 14)
         self.assertEqual(stats["total_cost_usd"], 0.1234)
 
+    def test_logger_extracts_dashboard_error_message(self):
+        manager = LoggerManager()
+        manager.log_api_call(
+            method="POST",
+            path="/v1/chat/completions",
+            status=502,
+            duration_ms=1000,
+            response_data={
+                "error": {
+                    "message": "Upstream rejected the request",
+                    "type": "upstream_error",
+                }
+            },
+        )
+
+        calls = manager.get_api_calls()
+        self.assertEqual(calls[0]["error_message"], "Upstream rejected the request")
+
     def test_oauth_refresh_scheduler_enforces_minimum_delay(self):
         timer_intervals = []
 

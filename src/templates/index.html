@@ -266,31 +266,64 @@
         button.primary:hover { background: #1d4ed8; }
 
         .logs {
-            max-height: 430px;
+            max-height: 560px;
             overflow: auto;
         }
 
-        .log-entry {
-            display: grid;
-            grid-template-columns: 76px 54px minmax(0, 1fr) 62px 76px;
-            gap: 10px;
-            align-items: center;
-            padding: 10px 14px;
+        .log-item {
             border-bottom: 1px solid var(--border);
-            font-size: 12px;
         }
 
-        .log-entry:last-child { border-bottom: 0; }
+        .log-item:last-child {
+            border-bottom: 0;
+        }
+
+        .log-summary {
+            width: 100%;
+            display: grid;
+            grid-template-columns: 22px 76px 54px minmax(140px, 1.2fr) minmax(160px, 1fr) 62px 76px;
+            gap: 10px;
+            align-items: center;
+            margin: 0;
+            padding: 10px 14px;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            color: var(--text);
+            font-size: 12px;
+            font-weight: 400;
+            text-align: left;
+        }
+
+        .log-summary:hover,
+        .log-item.open .log-summary {
+            background: var(--surface-alt);
+        }
+
+        .expand-indicator {
+            display: grid;
+            width: 18px;
+            height: 18px;
+            place-items: center;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            color: var(--muted);
+            font-family: var(--mono);
+            font-size: 11px;
+            font-weight: 700;
+        }
 
         .log-time,
         .method,
         .path,
-        .duration {
+        .duration,
+        .log-message {
             font-family: var(--mono);
         }
 
         .log-time,
-        .duration {
+        .duration,
+        .log-message {
             color: var(--muted);
             font-size: 11px;
         }
@@ -301,11 +334,17 @@
             font-weight: 700;
         }
 
-        .path {
+        .path,
+        .log-message {
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
             min-width: 0;
+        }
+
+        .log-message.error-text {
+            color: var(--error);
+            font-weight: 700;
         }
 
         .code {
@@ -327,6 +366,84 @@
             color: var(--error);
         }
 
+        .log-detail {
+            padding: 0 14px 14px 46px;
+        }
+
+        .log-detail-inner {
+            display: grid;
+            gap: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+        }
+
+        .detail-meta {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .detail-label {
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .detail-value {
+            overflow: hidden;
+            font-family: var(--mono);
+            font-size: 11px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .error-banner {
+            padding: 9px 10px;
+            border: 1px solid #fecaca;
+            border-radius: 7px;
+            background: var(--error-light);
+            color: var(--error);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .detail-columns {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .detail-block {
+            min-width: 0;
+        }
+
+        .detail-title {
+            margin-bottom: 6px;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .log-json {
+            max-height: 260px;
+            overflow: auto;
+            margin: 0;
+            padding: 10px;
+            border-radius: 6px;
+            background: #111827;
+            color: #e5e7eb;
+            font-family: var(--mono);
+            font-size: 11px;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .log-json.empty-json {
+            background: var(--surface-alt);
+            color: var(--muted);
+        }
+
         .empty {
             padding: 32px 14px;
             color: var(--muted);
@@ -335,10 +452,20 @@
         }
 
         @media (max-width: 760px) {
-            .log-entry {
-                grid-template-columns: 64px 44px minmax(0, 1fr) 54px;
+            .log-summary {
+                grid-template-columns: 22px 64px 44px minmax(0, 1fr) 54px;
             }
+
+            .expand-indicator { grid-column: 1; grid-row: 1 / span 2; }
+            .log-time { grid-column: 2; grid-row: 1; }
+            .method { grid-column: 3; grid-row: 1; }
+            .path { grid-column: 4; grid-row: 1; }
+            .code { grid-column: 5; grid-row: 1; }
+            .log-message { grid-column: 2 / 6; grid-row: 2; }
             .duration { display: none; }
+            .log-detail { padding-left: 14px; }
+            .detail-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .detail-columns { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -455,6 +582,9 @@
     </div>
 
     <script>
+        const expandedLogs = new Set();
+        let lastApiCalls = [];
+
         function text(id, value) {
             document.getElementById(id).textContent = value ?? "-";
         }
@@ -481,12 +611,167 @@
             return `$${Number(value).toFixed(4)}`;
         }
 
+        function fmtDuration(value) {
+            return `${Number(value || 0)}ms`;
+        }
+
         function fmtTime(timestamp) {
             return new Date(timestamp * 1000).toLocaleTimeString([], {
                 hour: "2-digit",
                 minute: "2-digit",
                 second: "2-digit"
             });
+        }
+
+        function logKey(entry) {
+            return [
+                entry.timestamp,
+                entry.method,
+                entry.path,
+                entry.status,
+                entry.duration_ms
+            ].join("|");
+        }
+
+        function extractErrorMessage(data) {
+            if (!data) return "";
+            if (typeof data === "string") return data;
+            if (typeof data !== "object") return "";
+
+            const error = data.error;
+            if (typeof error === "string") return error;
+            if (error && typeof error === "object") {
+                return error.message || error.detail || error.error_description || error.code || "";
+            }
+            return data.message || data.detail || data.error_description || "";
+        }
+
+        function getErrorMessage(entry) {
+            return entry.error_message || extractErrorMessage(entry.response) || "Request failed";
+        }
+
+        function fmtSummaryMessage(entry, ok) {
+            if (!ok) return getErrorMessage(entry);
+
+            const input = Number(entry.input_tokens || 0);
+            const output = Number(entry.output_tokens || 0);
+            const cost = Number(entry.cost_usd || 0);
+            const parts = [];
+
+            if (input || output) {
+                parts.push(`${fmtNumber(input)} in / ${fmtNumber(output)} out`);
+            }
+            if (cost) {
+                parts.push(fmtCurrency(cost));
+            }
+
+            return parts.join(" - ") || "OK";
+        }
+
+        function formatJson(value) {
+            if (value === null || value === undefined) {
+                return '<pre class="log-json empty-json">Not captured</pre>';
+            }
+            return `<pre class="log-json">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+        }
+
+        function renderDetailMeta(label, value) {
+            return `
+                <div>
+                    <div class="detail-label">${escapeHtml(label)}</div>
+                    <div class="detail-value" title="${escapeHtml(value)}">${escapeHtml(value)}</div>
+                </div>
+            `;
+        }
+
+        function renderLogDetail(entry, ok, errorMessage) {
+            const tokens = `${fmtNumber(entry.input_tokens || 0)} input / ${fmtNumber(entry.output_tokens || 0)} output`;
+            const cost = fmtCurrency(entry.cost_usd || 0);
+            const rawLog = {
+                timestamp: entry.timestamp,
+                method: entry.method,
+                path: entry.path,
+                status: entry.status,
+                duration_ms: entry.duration_ms,
+                error_message: entry.error_message || "",
+                input_tokens: entry.input_tokens || 0,
+                output_tokens: entry.output_tokens || 0,
+                cost_usd: entry.cost_usd || 0,
+                request: entry.request,
+                response: entry.response
+            };
+
+            return `
+                <div class="log-detail">
+                    <div class="log-detail-inner">
+                        ${ok ? "" : `<div class="error-banner">${escapeHtml(errorMessage)}</div>`}
+                        <div class="detail-meta">
+                            ${renderDetailMeta("Method", entry.method || "-")}
+                            ${renderDetailMeta("Status", String(entry.status ?? "-"))}
+                            ${renderDetailMeta("Duration", fmtDuration(entry.duration_ms))}
+                            ${renderDetailMeta("Tokens", tokens)}
+                            ${renderDetailMeta("Cost", cost)}
+                        </div>
+                        <div class="detail-columns">
+                            <div class="detail-block">
+                                <div class="detail-title">Request</div>
+                                ${formatJson(entry.request)}
+                            </div>
+                            <div class="detail-block">
+                                <div class="detail-title">Response</div>
+                                ${formatJson(entry.response)}
+                            </div>
+                        </div>
+                        <div class="detail-block">
+                            <div class="detail-title">Full Log</div>
+                            ${formatJson(rawLog)}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderLogEntry(entry) {
+            const ok = entry.status < 400;
+            const key = logKey(entry);
+            const expanded = expandedLogs.has(key);
+            const errorMessage = ok ? "" : getErrorMessage(entry);
+            const summaryMessage = fmtSummaryMessage(entry, ok);
+
+            return `
+                <div class="log-item ${expanded ? "open" : ""}">
+                    <button class="log-summary" type="button" data-log-key="${escapeHtml(key)}" aria-expanded="${expanded}">
+                        <span class="expand-indicator">${expanded ? "-" : "+"}</span>
+                        <span class="log-time">${fmtTime(entry.timestamp)}</span>
+                        <span class="method">${escapeHtml(entry.method)}</span>
+                        <span class="path" title="${escapeHtml(entry.path)}">${escapeHtml(entry.path)}</span>
+                        <span class="log-message ${ok ? "" : "error-text"}" title="${escapeHtml(summaryMessage)}">
+                            ${escapeHtml(summaryMessage)}
+                        </span>
+                        <span class="code ${ok ? "ok" : "err"}">${escapeHtml(entry.status)}</span>
+                        <span class="duration">${fmtDuration(entry.duration_ms)}</span>
+                    </button>
+                    ${expanded ? renderLogDetail(entry, ok, errorMessage) : ""}
+                </div>
+            `;
+        }
+
+        function renderLogs(calls) {
+            const logs = document.getElementById("logs");
+            if (!calls.length) {
+                logs.innerHTML = '<div class="empty">No API calls yet</div>';
+                return;
+            }
+            logs.innerHTML = calls.map(renderLogEntry).join("");
+        }
+
+        function toggleLogDetail(key) {
+            if (expandedLogs.has(key)) {
+                expandedLogs.delete(key);
+            } else {
+                expandedLogs.add(key);
+            }
+            renderLogs(lastApiCalls);
         }
 
         async function fetchJson(url, options = {}) {
@@ -550,24 +835,8 @@
 
         async function loadLogs() {
             const data = await fetchJson("/api/logs?limit=80");
-            const logs = document.getElementById("logs");
-            const calls = data.apiCalls || [];
-            if (!calls.length) {
-                logs.innerHTML = '<div class="empty">No API calls yet</div>';
-                return;
-            }
-            logs.innerHTML = calls.map((entry) => {
-                const ok = entry.status < 400;
-                return `
-                    <div class="log-entry">
-                        <div class="log-time">${fmtTime(entry.timestamp)}</div>
-                        <div class="method">${entry.method}</div>
-                        <div class="path" title="${entry.path}">${entry.path}</div>
-                        <div class="code ${ok ? "ok" : "err"}">${entry.status}</div>
-                        <div class="duration">${entry.duration_ms}ms</div>
-                    </div>
-                `;
-            }).join("");
+            lastApiCalls = data.apiCalls || [];
+            renderLogs(lastApiCalls);
         }
 
         async function refreshAll() {
@@ -580,8 +849,16 @@
 
         async function clearLogs() {
             await fetchJson("/api/logs", { method: "DELETE" });
+            expandedLogs.clear();
             await loadLogs();
         }
+
+        document.getElementById("logs").addEventListener("click", (event) => {
+            if (!(event.target instanceof Element)) return;
+            const summary = event.target.closest(".log-summary");
+            if (!summary) return;
+            toggleLogDetail(summary.dataset.logKey);
+        });
 
         refreshAll();
         setInterval(refreshAll, 5000);

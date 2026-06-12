@@ -12,7 +12,7 @@ internal OpenAI-compatible endpoint.
 - Uses the OpenAI Python SDK against `TARGET_ENDPOINT`.
 - Supports non-streaming and streaming Chat Completions responses.
 - Supports upstream OAuth client-credentials auth or static API-key auth.
-- Provides a local dashboard for setup values, logs, usage, model mapping, and per-model pricing.
+- Provides a local dashboard for setup values, usage, model mapping, per-model pricing, and expandable call logs with inline errors.
 
 This intentionally does not include the old Anthropic-to-OpenAI translation
 layer. Requests and responses stay OpenAI-compatible end to end, with only the
