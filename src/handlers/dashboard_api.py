@@ -87,6 +87,7 @@ def get_configuration():
             "openaiBaseUrl": config.get_openai_base_url(),
             "accessTokenPreview": _redact_token(config.proxy_access_token),
             "kiloProxyApiKeyExport": "export KILO_PROXY_API_KEY='<proxy token from startup banner>'",
+            "kiloSpec": config.get_kilo_config_snippet(),
         }
     )
     return jsonify(config_dict)

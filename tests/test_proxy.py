@@ -476,6 +476,8 @@ class ProxyTestCase(unittest.TestCase):
         config_payload = config_response.get_json()
         self.assertIn("model_pricing_table", config_payload)
         self.assertEqual(config_payload["model_pricing_table"][0]["model"], "kilo-gpt")
+        self.assertIn("kiloSpec", config_payload)
+        self.assertIn("provider", config_payload["kiloSpec"])
         self.assertNotIn("kiloConfigJson", config_payload)
 
 

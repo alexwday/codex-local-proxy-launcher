@@ -237,6 +237,46 @@
             color: var(--muted);
         }
 
+        .spec-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .setup-note {
+            display: grid;
+            grid-template-columns: 112px minmax(0, 1fr);
+            gap: 10px;
+            margin-bottom: 12px;
+            padding: 10px;
+            border-radius: 7px;
+            background: var(--accent-light);
+        }
+
+        .setup-note .label {
+            font-weight: 700;
+        }
+
+        .setup-note .value {
+            background: #fff;
+            text-overflow: clip;
+            white-space: normal;
+        }
+
+        .spec-json {
+            max-height: 340px;
+            overflow: auto;
+            margin: 0;
+            padding: 12px;
+            border-radius: 7px;
+            background: #111827;
+            color: #e5e7eb;
+            font-family: var(--mono);
+            font-size: 11px;
+            line-height: 1.55;
+            white-space: pre;
+        }
+
         .actions {
             display: flex;
             gap: 8px;
@@ -466,6 +506,7 @@
             .log-detail { padding-left: 14px; }
             .detail-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .detail-columns { grid-template-columns: 1fr; }
+            .setup-note { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -480,6 +521,7 @@
                 </div>
             </div>
             <div class="actions">
+                <button class="primary" onclick="copyKiloSpec()">Copy Kilo Spec</button>
                 <button onclick="refreshAll()">Refresh</button>
                 <span class="status">Active</span>
             </div>
@@ -565,6 +607,25 @@
 
         <section class="panel wide">
             <div class="panel-header">
+                <div class="panel-title">Kilo Spec</div>
+                <div class="spec-actions">
+                    <button onclick="copyKiloSpec()">Copy Spec</button>
+                    <button onclick="copyKiloBaseUrl()">Copy Base URL</button>
+                </div>
+            </div>
+            <div class="panel-body">
+                <div class="setup-note">
+                    <div class="label">Load Path</div>
+                    <div class="value">Kilo Code settings -> Providers -> OpenAI Compatible</div>
+                    <div class="label">Use</div>
+                    <div class="value">Base URL, API key, then the model names/spec below</div>
+                </div>
+                <pre class="spec-json" id="kiloSpec">{}</pre>
+            </div>
+        </section>
+
+        <section class="panel wide">
+            <div class="panel-header">
                 <div class="panel-title">Models & Pricing</div>
             </div>
             <div class="panel-body">
@@ -584,6 +645,8 @@
     <script>
         const expandedLogs = new Set();
         let lastApiCalls = [];
+        let lastConfig = {};
+        let lastKiloSpec = {};
 
         function text(id, value) {
             document.getElementById(id).textContent = value ?? "-";
@@ -782,11 +845,14 @@
 
         async function loadConfig() {
             const config = await fetchJson("/api/config");
+            lastConfig = config;
+            lastKiloSpec = config.kiloSpec || {};
             text("baseUrl", config.openaiBaseUrl);
             text("apiKey", config.accessTokenPreview);
             text("modelsUrl", config.models_url || config.modelsUrl);
             text("targetEndpoint", config.target_endpoint);
             text("proxyMode", config.use_placeholder_mode ? "placeholder" : "proxy");
+            text("kiloSpec", JSON.stringify(lastKiloSpec, null, 2));
 
             const auth = config.oauth_configured
                 ? "oauth"
@@ -851,6 +917,14 @@
             await fetchJson("/api/logs", { method: "DELETE" });
             expandedLogs.clear();
             await loadLogs();
+        }
+
+        async function copyKiloSpec() {
+            await navigator.clipboard.writeText(JSON.stringify(lastKiloSpec, null, 2));
+        }
+
+        async function copyKiloBaseUrl() {
+            await navigator.clipboard.writeText(lastConfig.openaiBaseUrl || "");
         }
 
         document.getElementById("logs").addEventListener("click", (event) => {

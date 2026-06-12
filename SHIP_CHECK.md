@@ -15,6 +15,7 @@ Checked June 12, 2026.
 Implementation coverage:
 
 - `GET /v1/models` returns OpenAI-shaped model objects from `MODEL_OPTIONS`.
+- The dashboard shows and copies the generated Kilo spec for provider/model setup.
 - The dashboard shows Kilo-facing models, upstream mappings, and configured per-1K-token pricing.
 - Recent dashboard calls expand to show sanitized request/response details and inline error messages.
 - The proxy accepts either `model` or `provider/model` and maps to upstream with `MODEL_MAPPING`.
