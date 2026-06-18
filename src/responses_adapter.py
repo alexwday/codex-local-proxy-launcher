@@ -152,11 +152,12 @@ def _response_item_to_chat_messages(item: dict[str, Any]) -> list[dict[str, Any]
         return [{"role": role, "content": _content_to_text(item.get("content"))}]
 
     if item_type in {"function_call_output", "custom_tool_call_output"}:
+        output = item["output"] if "output" in item else item.get("content")
         return [
             {
                 "role": "tool",
                 "tool_call_id": item.get("call_id") or item.get("id") or "call_unknown",
-                "content": _jsonish(item.get("output")),
+                "content": _jsonish(output),
             }
         ]
 
@@ -336,6 +337,95 @@ def _custom_tool_input_from_chat_arguments(arguments: Any) -> str:
     return _jsonish(parsed)
 
 
+def _tool_call_id(tool_call: Any) -> str | None:
+    if not isinstance(tool_call, dict):
+        return None
+    call_id = tool_call.get("id")
+    return str(call_id) if call_id else None
+
+
+def normalize_chat_messages_for_upstream(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Make Responses-style histories valid for Chat Completions tool rules."""
+    normalized: list[dict[str, Any]] = []
+    moved_tool_message_indexes: set[int] = set()
+
+    for index, message in enumerate(messages):
+        if index in moved_tool_message_indexes:
+            continue
+
+        if message.get("role") == "tool":
+            continue
+
+        tool_calls = message.get("tool_calls")
+        if message.get("role") != "assistant" or not isinstance(tool_calls, list) or not tool_calls:
+            normalized.append(message)
+            continue
+
+        matched_outputs: dict[str, tuple[int, dict[str, Any]]] = {}
+        for output_index in range(index + 1, len(messages)):
+            if output_index in moved_tool_message_indexes:
+                continue
+            candidate = messages[output_index]
+            if candidate.get("role") != "tool":
+                continue
+            output_call_id = candidate.get("tool_call_id")
+            if output_call_id and output_call_id not in matched_outputs:
+                matched_outputs[str(output_call_id)] = (output_index, candidate)
+
+        paired_tool_calls = [
+            tool_call
+            for tool_call in tool_calls
+            if (call_id := _tool_call_id(tool_call)) and call_id in matched_outputs
+        ]
+        if not paired_tool_calls:
+            content = message.get("content")
+            if content:
+                assistant_without_tools = dict(message)
+                assistant_without_tools.pop("tool_calls", None)
+                normalized.append(assistant_without_tools)
+            continue
+
+        paired_assistant = dict(message)
+        paired_assistant["tool_calls"] = paired_tool_calls
+        normalized.append(paired_assistant)
+        for tool_call in paired_tool_calls:
+            call_id = _tool_call_id(tool_call)
+            if not call_id:
+                continue
+            output_index, tool_message = matched_outputs[call_id]
+            normalized.append(tool_message)
+            moved_tool_message_indexes.add(output_index)
+
+    return normalized
+
+
+def responses_text_format_to_chat_response_format(text_format: Any) -> dict[str, Any] | None:
+    if not isinstance(text_format, dict):
+        return None
+
+    format_type = text_format.get("type")
+    if format_type == "json_object":
+        return {"type": "json_object"}
+    if format_type != "json_schema":
+        return None
+
+    if isinstance(text_format.get("json_schema"), dict):
+        json_schema = dict(text_format["json_schema"])
+    else:
+        json_schema = {
+            key: text_format[key]
+            for key in ("name", "description", "schema", "strict")
+            if key in text_format
+        }
+
+    if "name" not in json_schema:
+        json_schema["name"] = "response"
+    if not isinstance(json_schema.get("schema"), dict):
+        json_schema["schema"] = {"type": "object", "additionalProperties": True}
+
+    return {"type": "json_schema", "json_schema": json_schema}
+
+
 def build_chat_request_from_responses(
     config,
     request_payload: dict[str, Any],
@@ -356,6 +446,7 @@ def build_chat_request_from_responses(
         messages.insert(0, {"role": "system", "content": str(instructions)})
 
     messages.extend(responses_input_to_chat_messages(request_payload.get("input")))
+    messages = normalize_chat_messages_for_upstream(messages)
 
     chat_request: dict[str, Any] = {
         "model": target_model,
@@ -384,9 +475,9 @@ def build_chat_request_from_responses(
 
     text_config = request_payload.get("text")
     if isinstance(text_config, dict) and isinstance(text_config.get("format"), dict):
-        fmt = text_config["format"]
-        if fmt.get("type") in {"json_object", "json_schema"}:
-            chat_request["response_format"] = fmt
+        response_format = responses_text_format_to_chat_response_format(text_config["format"])
+        if response_format:
+            chat_request["response_format"] = response_format
 
     config.apply_completion_token_limit(chat_request)
     return chat_request, public_model, target_model, messages

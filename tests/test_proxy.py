@@ -573,6 +573,164 @@ class ProxyTestCase(unittest.TestCase):
         self.assertEqual(messages[-2]["tool_calls"][0]["id"], "call_123")
         self.assertEqual(messages[-1], {"role": "tool", "tool_call_id": "call_123", "content": "/tmp/project"})
 
+    def test_responses_text_json_schema_maps_to_chat_response_format(self):
+        fake_client = _FakeOpenAIClient(
+            _FakeCompletion(
+                {
+                    "id": "chatcmpl-json-schema",
+                    "object": "chat.completion",
+                    "created": 124,
+                    "model": "internal-gpt",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "{\"summary\":\"ok\"}"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+                }
+            )
+        )
+
+        schema = {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+        with mock.patch.object(proxy_handler, "OpenAI", return_value=fake_client):
+            response = self.client.post(
+                "/v1/responses",
+                headers=self._headers(),
+                json={
+                    "model": "codex-gpt",
+                    "input": "summarize",
+                    "text": {
+                        "format": {
+                            "type": "json_schema",
+                            "name": "project_summary",
+                            "schema": schema,
+                            "strict": True,
+                        }
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            fake_client.calls[0]["response_format"],
+            {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "project_summary",
+                    "schema": schema,
+                    "strict": True,
+                },
+            },
+        )
+
+    def test_previous_response_partial_tool_outputs_do_not_leave_unmatched_calls(self):
+        first_client = _FakeOpenAIClient(
+            _FakeCompletion(
+                {
+                    "id": "chatcmpl-two-tools",
+                    "object": "chat.completion",
+                    "created": 123,
+                    "model": "internal-gpt",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call_read",
+                                        "type": "function",
+                                        "function": {"name": "read_file", "arguments": "{\"path\":\"README.md\"}"},
+                                    },
+                                    {
+                                        "id": "call_list",
+                                        "type": "function",
+                                        "function": {"name": "list_files", "arguments": "{}"},
+                                    },
+                                ],
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+                }
+            )
+        )
+
+        tools = [
+            {
+                "type": "function",
+                "name": "read_file",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+            },
+            {
+                "type": "function",
+                "name": "list_files",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        ]
+        with mock.patch.object(proxy_handler, "OpenAI", return_value=first_client):
+            first = self.client.post(
+                "/v1/responses",
+                headers=self._headers(),
+                json={"model": "codex-gpt", "input": "inspect project", "tools": tools},
+            )
+
+        self.assertEqual(first.status_code, 200)
+        response_id = first.get_json()["id"]
+
+        second_client = _FakeOpenAIClient(
+            _FakeCompletion(
+                {
+                    "id": "chatcmpl-repaired",
+                    "object": "chat.completion",
+                    "created": 124,
+                    "model": "internal-gpt",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "summary"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+                }
+            )
+        )
+
+        with mock.patch.object(proxy_handler, "OpenAI", return_value=second_client):
+            second = self.client.post(
+                "/v1/responses",
+                headers=self._headers(),
+                json={
+                    "model": "codex-gpt",
+                    "previous_response_id": response_id,
+                    "input": [
+                        {"type": "message", "role": "user", "content": "now write a one pager"},
+                        {"type": "function_call_output", "call_id": "call_read", "output": "# Project"},
+                    ],
+                    "tools": tools,
+                },
+            )
+
+        self.assertEqual(second.status_code, 200)
+        messages = second_client.calls[0]["messages"]
+        assistant_messages = [message for message in messages if message.get("role") == "assistant"]
+        self.assertEqual(assistant_messages[-1]["tool_calls"][0]["id"], "call_read")
+        self.assertEqual(len(assistant_messages[-1]["tool_calls"]), 1)
+        assistant_index = messages.index(assistant_messages[-1])
+        self.assertEqual(messages[assistant_index + 1]["role"], "tool")
+        self.assertEqual(messages[assistant_index + 1]["tool_call_id"], "call_read")
+        self.assertEqual(messages[assistant_index + 2]["role"], "user")
+
     def test_responses_chat_adapter_rejects_hosted_tools(self):
         response = self.client.post(
             "/v1/responses",
