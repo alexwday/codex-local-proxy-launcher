@@ -3,13 +3,37 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from typing import Any
 
 
-SUPPORTED_CHAT_UPSTREAM_RESPONSE_TOOL_TYPES = {"function"}
+CHAT_MAPPABLE_RESPONSE_TOOL_TYPES = {"function", "custom"}
+CHAT_IGNORED_RESPONSE_TOOL_TYPES = {"tool_search", "web_search"}
+HOSTED_RESPONSE_TOOL_TYPES_REQUIRING_NATIVE = {
+    "code_interpreter",
+    "computer_use_preview",
+    "file_search",
+    "image_generation",
+    "mcp",
+    "shell",
+    "web_search_preview",
+    "web_search_preview_2025_03_11",
+}
 SUPPORTED_CHAT_UPSTREAM_CONTENT_TYPES = {"input_text", "output_text", "text"}
+DEFAULT_FUNCTION_PARAMETERS = {"type": "object", "properties": {}}
+DEFAULT_CUSTOM_TOOL_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "input": {
+            "type": "string",
+            "description": "Freeform input for the custom tool.",
+        }
+    },
+    "required": ["input"],
+    "additionalProperties": False,
+}
 
 
 def make_response_id() -> str:
@@ -24,11 +48,15 @@ def make_function_call_id() -> str:
     return f"fc_{uuid.uuid4().hex}"
 
 
+def make_custom_tool_call_id() -> str:
+    return f"ctc_{uuid.uuid4().hex}"
+
+
 def unsupported_tool_types(request_payload: dict[str, Any]) -> list[str]:
     unsupported = []
     for tool in request_payload.get("tools") or []:
         tool_type = tool.get("type") if isinstance(tool, dict) else None
-        if tool_type and tool_type not in SUPPORTED_CHAT_UPSTREAM_RESPONSE_TOOL_TYPES:
+        if tool_type in HOSTED_RESPONSE_TOOL_TYPES_REQUIRING_NATIVE:
             unsupported.append(tool_type)
     return unsupported
 
@@ -61,9 +89,14 @@ def unsupported_input_content_types(input_value: Any) -> list[str]:
         elif item_type and item_type not in {
             "function_call",
             "function_call_output",
+            "custom_tool_call",
+            "custom_tool_call_output",
             "reasoning",
             "web_search_call",
             "file_search_call",
+            "tool_search_call",
+            "tool_search_output",
+            "additional_tools",
         }:
             unsupported.append(str(item_type))
 
@@ -118,7 +151,7 @@ def _response_item_to_chat_messages(item: dict[str, Any]) -> list[dict[str, Any]
             role = "system"
         return [{"role": role, "content": _content_to_text(item.get("content"))}]
 
-    if item_type == "function_call_output":
+    if item_type in {"function_call_output", "custom_tool_call_output"}:
         return [
             {
                 "role": "tool",
@@ -127,8 +160,11 @@ def _response_item_to_chat_messages(item: dict[str, Any]) -> list[dict[str, Any]
             }
         ]
 
-    if item_type == "function_call":
+    if item_type in {"function_call", "custom_tool_call"}:
         call_id = item.get("call_id") or item.get("id") or "call_unknown"
+        arguments = item.get("arguments")
+        if item_type == "custom_tool_call" and arguments is None:
+            arguments = json.dumps({"input": item.get("input", "")}, ensure_ascii=False)
         return [
             {
                 "role": "assistant",
@@ -139,14 +175,21 @@ def _response_item_to_chat_messages(item: dict[str, Any]) -> list[dict[str, Any]
                         "type": "function",
                         "function": {
                             "name": item.get("name") or "unknown_function",
-                            "arguments": item.get("arguments") or "{}",
+                            "arguments": arguments or "{}",
                         },
                     }
                 ],
             }
         ]
 
-    if item_type in {"reasoning", "web_search_call", "file_search_call"}:
+    if item_type in {
+        "reasoning",
+        "web_search_call",
+        "file_search_call",
+        "tool_search_call",
+        "tool_search_output",
+        "additional_tools",
+    }:
         return []
 
     return [{"role": "user", "content": _content_to_text(item.get("content", item))}]
@@ -173,29 +216,124 @@ def responses_input_to_chat_messages(input_value: Any) -> list[dict[str, Any]]:
 
 def responses_tools_to_chat_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     chat_tools: list[dict[str, Any]] = []
-    for tool in tools or []:
-        if not isinstance(tool, dict) or tool.get("type") != "function":
+    seen_names: set[str] = set()
+    for tool, namespace in _iter_chat_mappable_response_tools(tools):
+        function = _response_tool_to_chat_function(tool, namespace)
+        if not function:
             continue
-        function: dict[str, Any] = {
-            "name": tool.get("name"),
-            "parameters": tool.get("parameters") or {"type": "object", "properties": {}},
-        }
-        if tool.get("description"):
-            function["description"] = tool["description"]
-        if "strict" in tool:
-            function["strict"] = bool(tool["strict"])
+        name = function["name"]
+        if name in seen_names:
+            continue
+        seen_names.add(name)
         chat_tools.append({"type": "function", "function": function})
     return chat_tools
 
 
-def responses_tool_choice_to_chat(tool_choice: Any) -> Any:
-    if tool_choice in {None, "auto", "none", "required"}:
+def responses_tool_choice_to_chat(tool_choice: Any, available_tool_names: set[str] | None = None) -> Any:
+    if tool_choice is None or (isinstance(tool_choice, str) and tool_choice in {"auto", "none", "required"}):
         return tool_choice
-    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+    if isinstance(tool_choice, dict) and tool_choice.get("type") in CHAT_MAPPABLE_RESPONSE_TOOL_TYPES:
         name = tool_choice.get("name") or tool_choice.get("function", {}).get("name")
         if name:
-            return {"type": "function", "function": {"name": name}}
+            chat_name = _chat_tool_name(name)
+            if chat_name and (available_tool_names is None or chat_name in available_tool_names):
+                return {"type": "function", "function": {"name": chat_name}}
     return "auto"
+
+
+def _iter_chat_mappable_response_tools(
+    tools: list[dict[str, Any]] | None,
+) -> list[tuple[dict[str, Any], str | None]]:
+    mappable: list[tuple[dict[str, Any], str | None]] = []
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        tool_type = tool.get("type")
+        if tool_type == "namespace":
+            namespace = str(tool.get("name") or "").strip() or None
+            for nested_tool in tool.get("tools") or []:
+                if not isinstance(nested_tool, dict):
+                    continue
+                nested_type = nested_tool.get("type")
+                if nested_type in CHAT_MAPPABLE_RESPONSE_TOOL_TYPES:
+                    mappable.append((nested_tool, namespace))
+            continue
+        if tool_type in CHAT_IGNORED_RESPONSE_TOOL_TYPES or tool_type in HOSTED_RESPONSE_TOOL_TYPES_REQUIRING_NATIVE:
+            continue
+        if tool_type in CHAT_MAPPABLE_RESPONSE_TOOL_TYPES:
+            mappable.append((tool, None))
+    return mappable
+
+
+def _chat_tool_name(name: Any) -> str | None:
+    if not name:
+        return None
+    chat_name = re.sub(r"[^A-Za-z0-9_-]", "_", str(name).strip())
+    chat_name = chat_name.strip("_")[:64]
+    return chat_name or None
+
+
+def _response_tool_parameters(tool: dict[str, Any]) -> dict[str, Any]:
+    for key in ("parameters", "input_schema", "schema", "json_schema"):
+        parameters = tool.get(key)
+        if isinstance(parameters, dict):
+            return parameters
+    if tool.get("type") == "custom":
+        return dict(DEFAULT_CUSTOM_TOOL_PARAMETERS)
+    return dict(DEFAULT_FUNCTION_PARAMETERS)
+
+
+def _response_tool_to_chat_function(tool: dict[str, Any], namespace: str | None) -> dict[str, Any] | None:
+    name = _chat_tool_name(tool.get("name"))
+    if not name:
+        return None
+
+    function: dict[str, Any] = {
+        "name": name,
+        "parameters": _response_tool_parameters(tool),
+    }
+    description = tool.get("description")
+    if namespace:
+        prefix = f"{namespace} namespace"
+        description = f"{prefix}: {description}" if description else prefix
+    if description:
+        function["description"] = str(description)
+    if "strict" in tool:
+        function["strict"] = bool(tool["strict"])
+    return function
+
+
+def response_tool_metadata_by_chat_name(tools: list[dict[str, Any]] | None) -> dict[str, dict[str, str]]:
+    metadata: dict[str, dict[str, str]] = {}
+    for tool, namespace in _iter_chat_mappable_response_tools(tools):
+        chat_name = _chat_tool_name(tool.get("name"))
+        if not chat_name or chat_name in metadata:
+            continue
+        item = {
+            "type": str(tool.get("type") or "function"),
+            "name": str(tool.get("name") or chat_name),
+        }
+        if namespace:
+            item["namespace"] = namespace
+        metadata[chat_name] = item
+    return metadata
+
+
+def _custom_tool_input_from_chat_arguments(arguments: Any) -> str:
+    if arguments is None:
+        return ""
+    if not isinstance(arguments, str):
+        return _jsonish(arguments)
+    try:
+        parsed = json.loads(arguments)
+    except (TypeError, ValueError):
+        return arguments
+    if isinstance(parsed, dict):
+        if "input" in parsed:
+            return str(parsed["input"])
+        if len(parsed) == 1:
+            return str(next(iter(parsed.values())))
+    return _jsonish(parsed)
 
 
 def build_chat_request_from_responses(
@@ -238,8 +376,11 @@ def build_chat_request_from_responses(
 
     tools = responses_tools_to_chat_tools(request_payload.get("tools"))
     if tools:
+        available_tool_names = {tool["function"]["name"] for tool in tools if tool.get("function", {}).get("name")}
         chat_request["tools"] = tools
-        chat_request["tool_choice"] = responses_tool_choice_to_chat(request_payload.get("tool_choice"))
+        tool_choice = responses_tool_choice_to_chat(request_payload.get("tool_choice"), available_tool_names)
+        if tool_choice is not None:
+            chat_request["tool_choice"] = tool_choice
 
     text_config = request_payload.get("text")
     if isinstance(text_config, dict) and isinstance(text_config.get("format"), dict):
@@ -274,8 +415,12 @@ def chat_usage_to_response_usage(usage: dict[str, Any] | None) -> dict[str, Any]
     }
 
 
-def chat_message_to_response_output(message: dict[str, Any]) -> list[dict[str, Any]]:
+def chat_message_to_response_output(
+    message: dict[str, Any],
+    original_request: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
+    tool_metadata = response_tool_metadata_by_chat_name((original_request or {}).get("tools"))
     content = message.get("content")
     if content:
         output.append(
@@ -296,15 +441,35 @@ def chat_message_to_response_output(message: dict[str, Any]) -> list[dict[str, A
 
     for tool_call in message.get("tool_calls") or []:
         function = tool_call.get("function") or {}
+        chat_name = function.get("name") or "unknown_function"
+        metadata = tool_metadata.get(chat_name, {})
+        response_name = metadata.get("name") or chat_name
+        call_id = tool_call.get("id") or make_function_call_id()
+        if metadata.get("type") == "custom":
+            output.append(
+                {
+                    "id": make_custom_tool_call_id(),
+                    "type": "custom_tool_call",
+                    "call_id": call_id,
+                    "name": response_name,
+                    "input": _custom_tool_input_from_chat_arguments(function.get("arguments")),
+                    "status": "completed",
+                }
+            )
+            continue
+
+        item = {
+            "id": make_function_call_id(),
+            "type": "function_call",
+            "call_id": call_id,
+            "name": response_name,
+            "arguments": function.get("arguments") or "{}",
+            "status": "completed",
+        }
+        if metadata.get("namespace"):
+            item["namespace"] = metadata["namespace"]
         output.append(
-            {
-                "id": make_function_call_id(),
-                "type": "function_call",
-                "call_id": tool_call.get("id") or make_function_call_id(),
-                "name": function.get("name") or "unknown_function",
-                "arguments": function.get("arguments") or "{}",
-                "status": "completed",
-            }
+            item
         )
     return output
 
@@ -320,7 +485,7 @@ def response_payload_from_chat_completion(
     response_id = response_id or make_response_id()
     choice = (completion_payload.get("choices") or [{}])[0]
     message = choice.get("message") or {}
-    output = chat_message_to_response_output(message)
+    output = chat_message_to_response_output(message, original_request)
     finish_reason = choice.get("finish_reason")
     status = "incomplete" if finish_reason == "length" else "completed"
     usage = chat_usage_to_response_usage(completion_payload.get("usage"))
@@ -404,6 +569,7 @@ class ResponseStreamAdapter:
         self.original_request = original_request
         self.response_id = response_id or make_response_id()
         self.created = int(time.time())
+        self.tool_metadata = response_tool_metadata_by_chat_name(original_request.get("tools"))
         self.text_item_id: str | None = None
         self.text_started = False
         self.text = ""
@@ -572,21 +738,24 @@ class ResponseStreamAdapter:
         tool_calls: list[dict[str, Any]] = []
         for index in sorted(self.tool_calls):
             state = self.tool_calls[index]
+            metadata = self.tool_metadata.get(state["name"], {})
             item = {
                 "id": state["id"],
                 "type": "function_call",
                 "call_id": state["call_id"],
-                "name": state["name"] or "unknown_function",
+                "name": metadata.get("name") or state["name"] or "unknown_function",
                 "arguments": state["arguments"] or "{}",
                 "status": "completed",
             }
+            if metadata.get("namespace"):
+                item["namespace"] = metadata["namespace"]
             output.append(item)
             tool_calls.append(
                 {
                     "id": state["call_id"],
                     "type": "function",
                     "function": {
-                        "name": item["name"],
+                        "name": state["name"] or item["name"],
                         "arguments": item["arguments"],
                     },
                 }

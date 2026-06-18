@@ -398,8 +398,9 @@ def responses():
         unsupported = unsupported_tool_types(response_request)
         if unsupported:
             error = openai_error(
-                "This local Chat Completions upstream adapter only supports Responses function tools; "
-                f"unsupported tool types: {', '.join(sorted(set(unsupported)))}",
+                "This local Chat Completions upstream adapter cannot run hosted Responses tools. "
+                "Set CODEX_UPSTREAM_WIRE_API=responses for a native Responses upstream, or remove tool types: "
+                f"{', '.join(sorted(set(unsupported)))}",
                 "invalid_request_error",
                 "unsupported_tool",
             )

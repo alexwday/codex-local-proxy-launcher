@@ -587,6 +587,164 @@ class ProxyTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"]["code"], "unsupported_tool")
 
+    def test_responses_chat_adapter_accepts_codex_tool_declarations(self):
+        fake_client = _FakeOpenAIClient(
+            _FakeCompletion(
+                {
+                    "id": "chatcmpl-tools",
+                    "object": "chat.completion",
+                    "created": 124,
+                    "model": "internal-gpt",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 2, "total_tokens": 14},
+                }
+            )
+        )
+
+        with mock.patch.object(proxy_handler, "OpenAI", return_value=fake_client):
+            response = self.client.post(
+                "/v1/responses",
+                headers=self._headers(),
+                json={
+                    "model": "codex-gpt",
+                    "input": "use tools if needed",
+                    "tools": [
+                        {
+                            "type": "custom",
+                            "name": "code_exec",
+                            "description": "Run code as freeform text.",
+                        },
+                        {
+                            "type": "namespace",
+                            "name": "workspace",
+                            "description": "Workspace tools.",
+                            "tools": [
+                                {
+                                    "type": "function",
+                                    "name": "read_file",
+                                    "description": "Read a file.",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {"path": {"type": "string"}},
+                                        "required": ["path"],
+                                        "additionalProperties": False,
+                                    },
+                                },
+                                {
+                                    "type": "function",
+                                    "name": "write_file",
+                                    "description": "Write a file.",
+                                    "defer_loading": True,
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                                        "required": ["path", "content"],
+                                        "additionalProperties": False,
+                                    },
+                                },
+                            ],
+                        },
+                        {"type": "tool_search"},
+                        {"type": "web_search"},
+                    ],
+                    "tool_choice": {"type": "custom", "name": "code_exec"},
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        chat_tools = fake_client.calls[0]["tools"]
+        self.assertEqual([tool["function"]["name"] for tool in chat_tools], ["code_exec", "read_file", "write_file"])
+        self.assertEqual(
+            fake_client.calls[0]["tool_choice"],
+            {"type": "function", "function": {"name": "code_exec"}},
+        )
+        custom_parameters = chat_tools[0]["function"]["parameters"]
+        self.assertEqual(custom_parameters["properties"]["input"]["type"], "string")
+        self.assertTrue(chat_tools[1]["function"]["description"].startswith("workspace namespace:"))
+
+    def test_responses_chat_adapter_preserves_custom_and_namespace_tool_calls(self):
+        fake_client = _FakeOpenAIClient(
+            _FakeCompletion(
+                {
+                    "id": "chatcmpl-tool-call",
+                    "object": "chat.completion",
+                    "created": 124,
+                    "model": "internal-gpt",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call_custom",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "code_exec",
+                                            "arguments": "{\"input\":\"print(1)\"}",
+                                        },
+                                    },
+                                    {
+                                        "id": "call_namespace",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "read_file",
+                                            "arguments": "{\"path\":\"README.md\"}",
+                                        },
+                                    },
+                                ],
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 2, "total_tokens": 14},
+                }
+            )
+        )
+
+        with mock.patch.object(proxy_handler, "OpenAI", return_value=fake_client):
+            response = self.client.post(
+                "/v1/responses",
+                headers=self._headers(),
+                json={
+                    "model": "codex-gpt",
+                    "input": "use tools",
+                    "tools": [
+                        {"type": "custom", "name": "code_exec"},
+                        {
+                            "type": "namespace",
+                            "name": "workspace",
+                            "tools": [
+                                {
+                                    "type": "function",
+                                    "name": "read_file",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {"path": {"type": "string"}},
+                                    },
+                                }
+                            ],
+                        },
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        output = response.get_json()["output"]
+        self.assertEqual(output[0]["type"], "custom_tool_call")
+        self.assertEqual(output[0]["name"], "code_exec")
+        self.assertEqual(output[0]["input"], "print(1)")
+        self.assertEqual(output[1]["type"], "function_call")
+        self.assertEqual(output[1]["name"], "read_file")
+        self.assertEqual(output[1]["namespace"], "workspace")
+
     def test_responses_chat_adapter_rejects_file_and_image_inputs(self):
         response = self.client.post(
             "/v1/responses",
