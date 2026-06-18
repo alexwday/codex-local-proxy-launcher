@@ -1,132 +1,150 @@
-# Kilo-Launcher
+# Codex Local Proxy Launcher
 
-Local OpenAI-compatible proxy + dashboard for routing Kilo Code traffic to an
-internal OpenAI-compatible endpoint.
+Local proxy, Codex Desktop config manager, and dashboard for routing Codex Desktop through a local OpenAI-compatible endpoint.
+
+Run it with:
+
+```bash
+./run.sh
+```
+
+On startup the launcher creates a virtualenv, installs dependencies, creates `src/.env` from `src/.env.example` if needed, starts the Flask proxy, health-checks it, writes a reversible user-level Codex config override, launches or restarts `/Applications/Codex.app`, and opens the dashboard when `AUTO_OPEN_BROWSER=true`.
 
 ## What It Does
 
-- Exposes `GET /v1/models` using model names from `MODEL_OPTIONS`.
-- Exposes `POST /v1/chat/completions` for Kilo Code's OpenAI-compatible provider.
-- Maps Kilo-facing model names to upstream/internal model names via `MODEL_MAPPING`.
-- Converts Kilo's `max_tokens` request field to upstream `max_completion_tokens` by default.
-- Uses the OpenAI Python SDK against `TARGET_ENDPOINT`.
-- Supports non-streaming and streaming Chat Completions responses.
-- Supports upstream OAuth client-credentials auth or static API-key auth.
-- Provides a local dashboard for setup values, Kilo spec copying, usage, model mapping, per-model pricing, and expandable call logs with inline errors.
+- Exposes `GET /v1/models` and `POST /v1/responses` for Codex Desktop.
+- Keeps `POST /v1/chat/completions` as a debug/backward-compatible endpoint.
+- Writes `~/.codex/config.toml` with a managed provider using `wire_api = "responses"`.
+- Stores the local Codex auth token at `~/.codex/codex-launcher/proxy_token` with `0600` permissions.
+- Backs up the full config and saves the original model/provider/provider-table state before applying changes.
+- Restores the previous Codex config with `./restore-codex.sh`.
+- Shows proxy health, active Codex config, upstream mode, model mapping, pricing, logs, and restore/restart/smoke-test controls in the dashboard.
 
-This intentionally does not include the old Anthropic-to-OpenAI translation
-layer. Requests and responses stay OpenAI-compatible end to end, with only the
-model field changed before the upstream call and restored before returning to
-Kilo.
+Codex Desktop currently expects custom providers to use the Responses API. The launcher therefore exposes `/v1/responses` to Codex even when the configured upstream only supports Chat Completions.
 
-## Quick Start
+## Codex Config
 
-1. Create and activate a virtual environment.
-2. Install dependencies:
-   - `pip install -r src/requirements.txt`
-3. Create config:
-   - `cp src/.env.example src/.env`
-4. Edit `src/.env` with your internal endpoint/auth/model settings.
-5. Start:
-   - `python src/app.py`
-   - or `./run.sh`
+The launcher manages user-level `~/.codex/config.toml`, not project-local `.codex/config.toml`, because provider and auth keys belong in the user config.
 
-## Kilo Code Settings
+Managed config shape:
 
-Use Kilo Code's OpenAI-compatible custom provider settings:
+```toml
+model = "gpt-5.5"
+model_provider = "codex-local-proxy"
 
-- Provider: `OpenAI Compatible`
-- Base URL: `http://localhost:<PROXY_PORT>/v1`
-- API key: the `PROXY_ACCESS_TOKEN` printed on startup, or the value you set in `src/.env`
-- Models: values from `MODEL_OPTIONS`
+[model_providers.codex-local-proxy]
+name = "Codex Local Proxy"
+base_url = "http://127.0.0.1:5051/v1"
+wire_api = "responses"
+supports_websockets = false
+stream_idle_timeout_ms = 900000
 
-The proxy also serves `GET /v1/models`, so Kilo can discover the model names
-defined in `MODEL_OPTIONS` when it calls the base URL with the proxy API key.
-
-## Model Mapping
-
-`MODEL_OPTIONS` controls what Kilo sees and selects:
-
-```env
-MODEL_OPTIONS=gpt-5.4,gpt-5.4-mini,gpt-5.4-nano,gpt-5.2,gpt-5.1,gpt-5,gpt-5-mini,gpt-5-nano
+[model_providers.codex-local-proxy.auth]
+command = "/bin/cat"
+args = ["/Users/alexwday/.codex/codex-launcher/proxy_token"]
+refresh_interval_ms = 0
 ```
 
-`MODEL_MAPPING` controls what the internal endpoint receives:
+## Upstream Modes
+
+Default mode translates Codex Responses requests to upstream Chat Completions:
 
 ```env
-MODEL_MAPPING=gpt-5.4=internal-openai-gpt-5.4,gpt-5.4-mini=internal-openai-gpt-5.4-mini,gpt-5.4-nano=internal-openai-gpt-5.4-nano,gpt-5.2=internal-openai-gpt-5.2,gpt-5.1=internal-openai-gpt-5.1,gpt-5=internal-openai-gpt-5,gpt-5-mini=internal-openai-gpt-5-mini,gpt-5-nano=internal-openai-gpt-5-nano
+CODEX_UPSTREAM_WIRE_API=chat_completions
+CODEX_TARGET_ENDPOINT=http://127.0.0.1:5050/v1
+CODEX_TARGET_API_KEY=<upstream-token>
 ```
 
-If a selected model is not present in `MODEL_MAPPING`, the proxy passes it
-through unchanged. Set `STRICT_MODEL_ALLOWLIST=true` to reject requests for
-models not listed in `MODEL_OPTIONS`.
-
-## Model Pricing
-
-`MODEL_PRICING_USD_PER_1K` controls dashboard pricing display and session
-cost tracking. Costs are USD per 1,000 tokens:
+Native mode passes Responses requests through to an upstream that supports `/v1/responses`:
 
 ```env
-MODEL_PRICING_USD_PER_1K=gpt-5.4=0/0,gpt-5.4-mini=0/0,gpt-5.4-nano=0/0,gpt-5.2=0/0,gpt-5.1=0/0,gpt-5=0/0,gpt-5-mini=0/0,gpt-5-nano=0/0
+CODEX_UPSTREAM_WIRE_API=responses
+CODEX_TARGET_ENDPOINT=https://api.openai.com/v1
+CODEX_TARGET_API_KEY=<upstream-token>
 ```
 
-Each value is `input_cost/output_cost`. For example, `gpt-5.4=0.0025/0.0100`
-means $0.0025 per 1,000 input tokens and $0.0100 per 1,000 output tokens.
+The Chat Completions adapter supports text, instructions, function tools, function-call outputs, `max_output_tokens`, model mapping, usage extraction, non-streaming responses, streaming text deltas, and streaming function-call deltas. Hosted built-in Responses tools such as web/file search are rejected with an OpenAI-shaped error unless native Responses mode is enabled.
 
-## Token Limit Handling
+## Migrating An Existing Env
 
-Kilo Code's OpenAI-compatible provider uses model `limit.output` to set an
-output cap, and its docs note that this may be sent as `max_tokens`. The proxy
-defaults to converting `max_tokens` into `max_completion_tokens` before sending
-requests upstream:
+You can reuse most values from an existing launcher `.env`, but keep the Codex launcher on its own local port so it does not collide with another proxy:
 
 ```env
-COMPLETION_TOKEN_LIMIT_FIELD=max_completion_tokens
-CONVERT_MAX_TOKENS_TO_MAX_COMPLETION_TOKENS=true
-INJECT_DEFAULT_MAX_COMPLETION_TOKENS=true
-DEFAULT_MAX_COMPLETION_TOKENS=16384
+CODEX_PROXY_PORT=5051
+CODEX_UPSTREAM_WIRE_API=chat_completions
 ```
 
-If Kilo omits a token limit entirely, the proxy injects
-`DEFAULT_MAX_COMPLETION_TOKENS`. This prevents internal GPT-5-style endpoints
-from falling back to low defaults such as 400 output tokens.
+If this launcher should call your existing local proxy, point it at that proxy and use that proxy's local API key:
+
+```env
+CODEX_TARGET_ENDPOINT=http://127.0.0.1:5050/v1
+CODEX_TARGET_API_KEY=<existing-local-proxy-token>
+```
+
+If this launcher should call the internal endpoint directly, copy the existing upstream values instead:
+
+```env
+CODEX_TARGET_ENDPOINT=<existing TARGET_ENDPOINT>
+CODEX_TARGET_API_KEY=<existing TARGET_API_KEY>
+```
+
+You can copy `MODEL_MAPPING`, `MODEL_PRICING_USD_PER_1K`, `OAUTH_*`, timeout, SSL, and token-limit settings directly. Prefer `CODEX_MODEL_OPTIONS` and `CODEX_DEFAULT_MODEL` for the Codex-facing model list/default. Leave `CODEX_PROXY_ACCESS_TOKEN` blank unless you intentionally want to reuse a fixed local token; otherwise the launcher creates `~/.codex/codex-launcher/proxy_token` for Codex Desktop.
 
 ## Key Env Vars
 
-- `PROXY_PORT`, `BIND_HOST`
-- `PROXY_ACCESS_TOKEN`, `DASHBOARD_ACCESS_TOKEN`
-- `TARGET_ENDPOINT`
+- `CODEX_PROXY_PORT`, `BIND_HOST`
+- `CODEX_PROXY_ACCESS_TOKEN`, `CODEX_DASHBOARD_ACCESS_TOKEN`
+- `CODEX_TARGET_ENDPOINT`, `CODEX_TARGET_API_KEY`, `CODEX_UPSTREAM_WIRE_API`
+- `CODEX_MODEL_OPTIONS`, `CODEX_DEFAULT_MODEL`, `MODEL_MAPPING`, `MODEL_PRICING_USD_PER_1K`
+- `CODEX_HOME`, `CODEX_CONFIG_PATH`, `CODEX_PROXY_TOKEN_FILE`
+- `CODEX_PROVIDER_ID`, `CODEX_PROVIDER_NAME`, `CODEX_APP_PATH`
+- `AUTO_APPLY_CODEX_CONFIG`, `AUTO_RESTART_CODEX_DESKTOP`, `AUTO_OPEN_BROWSER`
+- `USE_PLACEHOLDER_MODE`, `DEV_MODE`
 - `OAUTH_TOKEN_ENDPOINT`, `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_SCOPE`
-- `TARGET_API_KEY` or `OPENAI_API_KEY`
-- `MODEL_OPTIONS`, `MODEL_MAPPING`, `MODEL_PRICING_USD_PER_1K`
-- `DEFAULT_MODEL`, `STRICT_MODEL_ALLOWLIST`
-- `DEFAULT_MAX_COMPLETION_TOKENS`, `INJECT_DEFAULT_MAX_COMPLETION_TOKENS`
-- `COMPLETION_TOKEN_LIMIT_FIELD`, `CONVERT_MAX_TOKENS_TO_MAX_COMPLETION_TOKENS`
-- `OPENAI_REQUEST_TIMEOUT_SECONDS`, `OPENAI_STREAMING_TIMEOUT_SECONDS`
-- `SKIP_SSL_VERIFY`, `DEV_MODE`, `AUTO_OPEN_BROWSER`
 
-## Work Machine Setup
+## Dashboard APIs
 
-1. Clone this repo.
-2. Run `cp src/.env.example src/.env`.
-3. Copy over the shared endpoint/auth values from `cc-launcher/src/.env`.
-4. Fill in the right-hand side of each `MODEL_MAPPING` entry with the internal model names.
-5. Fill in `MODEL_PRICING_USD_PER_1K` with input/output costs for dashboard tracking.
-6. Run `./run.sh`.
-7. In Kilo Code, configure an OpenAI-compatible custom provider:
-   - Base URL: `http://localhost:<PROXY_PORT>/v1`
-   - API key: `PROXY_ACCESS_TOKEN`
-   - Models: load from the proxy or use the `MODEL_OPTIONS` names.
+- `GET /api/codex/status`
+- `POST /api/codex/apply-config`
+- `POST /api/codex/restore-config`
+- `POST /api/codex/restart-desktop`
+- `POST /api/codex/smoke-test`
 
-## Validation
+Sensitive values are redacted in API responses, dashboard views, and logs.
 
-Run:
+## Restore
+
+Restore the saved Codex config:
+
+```bash
+./restore-codex.sh
+```
+
+Restore and restart Codex Desktop:
+
+```bash
+./restore-codex.sh --restart
+```
+
+Backups and state live under `~/.codex/codex-launcher/`.
+
+## Development
+
+Run with placeholder responses:
+
+```bash
+./run-dev.sh
+```
+
+Run tests:
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-The test suite covers local auth, `/v1/models`, model mapping, model pricing,
-`max_tokens` to `max_completion_tokens` conversion, default token injection,
-non-streaming response rewriting, streaming response rewriting, and duplicate
-in-flight request detection.
+Optional integration checks on a machine with Codex CLI/Desktop installed:
+
+```bash
+codex doctor --strict-config
+codex exec --model gpt-5.5 "reply with ok"
+```

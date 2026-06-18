@@ -1,9 +1,17 @@
-"""Dashboard API endpoints for kilo-launcher."""
+"""Dashboard API endpoints for codex-local-proxy-launcher."""
 
 import hmac
 from functools import wraps
 
+import httpx
 from flask import Blueprint, jsonify, request, session
+
+from codex_config_manager import (
+    apply_codex_config,
+    get_codex_status,
+    restart_codex_desktop,
+    restore_codex_config,
+)
 
 dashboard_bp = Blueprint("dashboard", __name__)
 
@@ -81,13 +89,15 @@ def get_configuration():
     """Get current configuration with sensitive data redacted."""
     config = get_config()
     config_dict = config.to_dict()
+    codex_status = get_codex_status(config)
     config_dict.update(
         {
             "localBaseUrl": config.get_local_base_url(),
             "openaiBaseUrl": config.get_openai_base_url(),
             "accessTokenPreview": _redact_token(config.proxy_access_token),
-            "kiloProxyApiKeyExport": "export KILO_PROXY_API_KEY='<proxy token from startup banner>'",
-            "kiloSpec": config.get_kilo_config_snippet(),
+            "codexStatus": codex_status,
+            "codexConfig": config.get_codex_config_snippet(),
+            "proxyTokenFile": str(config.proxy_token_file),
         }
     )
     return jsonify(config_dict)
@@ -96,16 +106,17 @@ def get_configuration():
 @dashboard_bp.route("/api/setup", methods=["GET"])
 @require_dashboard_auth
 def get_setup():
-    """Return setup values for Kilo Code."""
+    """Return setup values for Codex."""
     config = get_config()
     return jsonify(
         {
-            "provider": "OpenAI Compatible",
-            "providerId": config.kilo_provider_id,
+            "provider": config.codex_provider_name,
+            "providerId": config.codex_provider_id,
             "baseUrl": config.get_openai_base_url(),
             "apiKeyPreview": _redact_token(config.proxy_access_token),
             "models": config.get_public_model_names(),
-            "kiloJson": config.get_kilo_config_snippet(),
+            "codexConfig": config.get_codex_config_snippet(),
+            "codexStatus": get_codex_status(config),
         }
     )
 
@@ -139,6 +150,8 @@ def get_status():
                 "port": config.port,
                 "mode": "placeholder" if config.use_placeholder_mode else "proxy",
                 "baseUrl": config.get_openai_base_url(),
+                "responsesUrl": config.get_responses_url(),
+                "upstreamWireApi": config.upstream_wire_api,
             },
             "target": {
                 "endpoint": config.target_endpoint,
@@ -148,8 +161,71 @@ def get_status():
                 "configured": config.is_upstream_auth_configured() or config.use_placeholder_mode,
             },
             "models": config.get_public_model_names(),
+            "codex": get_codex_status(config),
         }
     )
+
+
+@dashboard_bp.route("/api/codex/status", methods=["GET"])
+@require_dashboard_auth
+def get_codex_configuration_status():
+    """Return Codex Desktop/config status."""
+    return jsonify(get_codex_status(get_config()))
+
+
+@dashboard_bp.route("/api/codex/apply-config", methods=["POST"])
+@require_dashboard_auth
+def apply_codex_configuration():
+    """Apply the managed Codex config."""
+    return jsonify(apply_codex_config(get_config()))
+
+
+@dashboard_bp.route("/api/codex/restore-config", methods=["POST"])
+@require_dashboard_auth
+def restore_codex_configuration():
+    """Restore Codex config captured before this launcher applied changes."""
+    return jsonify(restore_codex_config(get_config()))
+
+
+@dashboard_bp.route("/api/codex/restart-desktop", methods=["POST"])
+@require_dashboard_auth
+def restart_codex_desktop_endpoint():
+    """Restart or launch Codex Desktop."""
+    return jsonify(restart_codex_desktop(get_config()))
+
+
+@dashboard_bp.route("/api/codex/smoke-test", methods=["POST"])
+@require_dashboard_auth
+def run_codex_proxy_smoke_test():
+    """Run a local Responses API smoke test through the proxy."""
+    config = get_config()
+    payload = {
+        "model": config.default_model,
+        "input": "Reply with exactly: codex-proxy-ok",
+        "stream": False,
+        "max_output_tokens": 32,
+    }
+    try:
+        response = httpx.post(
+            config.get_responses_url(),
+            headers={"Authorization": f"Bearer {config.proxy_access_token}"},
+            json=payload,
+            timeout=min(config.request_timeout_seconds, 30),
+        )
+        try:
+            body = response.json()
+        except Exception:
+            body = {"raw": response.text[:1000]}
+        return jsonify(
+            {
+                "ok": response.status_code < 400,
+                "status": response.status_code,
+                "request": payload,
+                "response": body,
+            }
+        ), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "request": payload}), 200
 
 
 @dashboard_bp.route("/api/logs", methods=["GET"])
@@ -214,4 +290,4 @@ def reset_usage():
 @dashboard_bp.route("/health", methods=["GET"])
 def health_check():
     """Health check endpoint."""
-    return jsonify({"status": "healthy", "service": "kilo-launcher"})
+    return jsonify({"status": "healthy", "service": "codex-local-proxy-launcher"})

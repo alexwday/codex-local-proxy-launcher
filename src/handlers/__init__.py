@@ -1,4 +1,4 @@
-"""Request handlers for kilo-launcher."""
+"""Request handlers for codex-local-proxy-launcher."""
 
 from .dashboard_api import dashboard_bp
 from .proxy_handler import proxy_bp

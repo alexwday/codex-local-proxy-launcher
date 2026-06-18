@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kilo-Launcher - local OpenAI-compatible proxy for Kilo Code."""
+"""Codex Local Proxy Launcher."""
 
 import logging
 import os
@@ -22,6 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from config import Config, setup_ssl
+from codex_config_manager import maybe_apply_and_launch
 from handlers import dashboard_bp, proxy_bp
 from logger_manager import LoggerManager
 from oauth_manager import OAuthManager
@@ -74,14 +75,16 @@ def create_app() -> Flask:
 
     log_manager.log_server_event(
         "info",
-        "Kilo-Launcher started",
+        "Codex Local Proxy Launcher started",
         {
             "port": config.port,
             "mode": "placeholder" if config.use_placeholder_mode else "proxy",
             "target": config.target_endpoint,
+            "upstream_wire_api": config.upstream_wire_api,
             "oauth": config.is_oauth_configured(),
             "ssl": config.ssl_enabled,
             "models": config.get_public_model_names(),
+            "codex_provider_id": config.codex_provider_id,
         },
     )
 
@@ -96,6 +99,58 @@ def open_browser(port: int):
     webbrowser.open(f"http://localhost:{port}")
 
 
+def wait_for_proxy_health(config, log_manager, timeout_seconds: float = 30.0) -> bool:
+    """Wait until the local proxy answers health and model checks."""
+    import time
+
+    import httpx
+
+    deadline = time.time() + timeout_seconds
+    last_error = ""
+    while time.time() < deadline:
+        try:
+            health_response = httpx.get(f"{config.get_local_base_url()}/health", timeout=2)
+            models_response = httpx.get(
+                config.get_models_url(),
+                headers={"Authorization": f"Bearer {config.proxy_access_token}"},
+                timeout=2,
+            )
+            if health_response.status_code == 200 and models_response.status_code == 200:
+                log_manager.log_server_event(
+                    "info",
+                    "Proxy health checks passed",
+                    {
+                        "health_status": health_response.status_code,
+                        "models_status": models_response.status_code,
+                    },
+                )
+                return True
+            last_error = f"health={health_response.status_code}, models={models_response.status_code}"
+        except Exception as e:
+            last_error = str(e)
+        time.sleep(0.5)
+
+    log_manager.log_server_event("error", f"Proxy health checks failed before Codex launch: {last_error}")
+    return False
+
+
+def apply_config_and_launch_codex(app: Flask):
+    """Apply Codex config and launch desktop after the proxy starts."""
+    import time
+
+    time.sleep(1.5)
+    with app.app_context():
+        config = app.config["KL_CONFIG"]
+        log_manager = app.config["LOG_MANAGER"]
+        try:
+            if not wait_for_proxy_health(config, log_manager):
+                return
+            maybe_apply_and_launch(config, log_manager)
+        except Exception as e:
+            logger.exception("Failed to apply Codex config or launch desktop")
+            log_manager.log_server_event("error", f"Failed to apply Codex config or launch desktop: {e}")
+
+
 def main():
     """Main entry point."""
     app = create_app()
@@ -103,30 +158,37 @@ def main():
 
     print()
     print("=" * 68)
-    print("  Kilo-Launcher - OpenAI-compatible proxy for Kilo Code")
+    print("  Codex Local Proxy Launcher")
     print("=" * 68)
     print()
     print(f"  Dashboard:       http://localhost:{config.port}")
     print(f"  OpenAI Base URL: {config.get_openai_base_url()}")
-    print(f"  Chat Endpoint:   {config.get_openai_base_url()}/chat/completions")
-    print(f"  Models Endpoint: {config.get_openai_base_url()}/models")
+    print(f"  Responses API:   {config.get_responses_url()}")
+    print(f"  Chat Debug API:  {config.get_chat_completions_url()}")
+    print(f"  Models Endpoint: {config.get_models_url()}")
     print()
     print(f"  Target:          {config.target_endpoint}")
+    print(f"  Upstream API:    {config.upstream_wire_api}")
     print(f"  Mode:            {'Placeholder' if config.use_placeholder_mode else 'Proxy'}")
     print(f"  SSL:             {'Enabled' if config.ssl_enabled else 'Disabled'}")
     print(f"  Bind Host:       {config.bind_host}")
     print(f"  Models:          {', '.join(config.get_public_model_names()) or '(none configured)'}")
     print()
-    print("  Kilo Code OpenAI-compatible provider settings:")
+    print("  Codex managed provider settings:")
     print()
-    print(f"    Base URL: {config.get_openai_base_url()}")
-    print(f"    API Key:  {config.proxy_access_token}")
+    print(f"    Provider:   {config.codex_provider_id}")
+    print(f"    Model:      {config.default_model}")
+    print(f"    Base URL:   {config.get_openai_base_url()}")
+    print(f"    Token file: {config.proxy_token_file}")
+    print(f"    Config:     {config.codex_config_path}")
     print()
     print("=" * 68)
     print()
 
     if config.auto_open_browser:
         threading.Thread(target=open_browser, args=(config.port,), daemon=True).start()
+    if config.auto_apply_codex_config or config.auto_restart_codex_desktop:
+        threading.Thread(target=apply_config_and_launch_codex, args=(app,), daemon=True).start()
 
     try:
         app.run(

@@ -1,8 +1,9 @@
-"""Configuration management for kilo-launcher."""
+"""Configuration management for codex-local-proxy-launcher."""
 
 import logging
 import os
 import secrets
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -108,15 +109,23 @@ def _parse_int(name: str, default: str) -> int:
         return int(default)
 
 
+def _env_first(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value is not None and str(value).strip() != "":
+            return str(value)
+    return default
+
+
+def _codex_home() -> Path:
+    return Path(os.getenv("CODEX_HOME", "~/.codex")).expanduser()
+
+
 DEFAULT_MODEL_OPTIONS = [
+    "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
     "gpt-5.4-nano",
-    "gpt-5.2",
-    "gpt-5.1",
-    "gpt-5",
-    "gpt-5-mini",
-    "gpt-5-nano",
 ]
 
 
@@ -125,19 +134,55 @@ class Config:
 
     def __init__(self):
         # Local proxy settings.
-        self.port = _parse_int("PROXY_PORT", "5050")
+        self.port = int(_env_first("CODEX_PROXY_PORT", "PROXY_PORT", default="5051"))
         self.bind_host = os.getenv("BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
-        self.proxy_access_token = os.getenv("PROXY_ACCESS_TOKEN") or self._generate_token()
-        self.dashboard_access_token = os.getenv("DASHBOARD_ACCESS_TOKEN") or self.proxy_access_token
+        self.codex_home = _codex_home()
+        self.launcher_state_dir = Path(
+            _env_first(
+                "CODEX_LAUNCHER_STATE_DIR",
+                default=str(self.codex_home / "codex-launcher"),
+            )
+        ).expanduser()
+        self.codex_config_path = Path(
+            _env_first("CODEX_CONFIG_PATH", default=str(self.codex_home / "config.toml"))
+        ).expanduser()
+        self.proxy_token_file = Path(
+            _env_first(
+                "CODEX_PROXY_TOKEN_FILE",
+                default=str(self.launcher_state_dir / "proxy_token"),
+            )
+        ).expanduser()
+        self.proxy_access_token = (
+            _env_first("CODEX_PROXY_ACCESS_TOKEN", "PROXY_ACCESS_TOKEN")
+            or self._load_or_generate_proxy_token()
+        )
+        self.dashboard_access_token = (
+            _env_first("CODEX_DASHBOARD_ACCESS_TOKEN", "DASHBOARD_ACCESS_TOKEN")
+            or self.proxy_access_token
+        )
 
         # Upstream OpenAI-compatible endpoint.
-        self.target_endpoint = (os.getenv("TARGET_ENDPOINT", "https://api.openai.com/v1").strip()
-                                or "https://api.openai.com/v1").rstrip("/")
-        self.target_api_key = os.getenv("TARGET_API_KEY") or os.getenv("OPENAI_API_KEY")
+        self.target_endpoint = (
+            _env_first("CODEX_TARGET_ENDPOINT", "TARGET_ENDPOINT", default="https://api.openai.com/v1").strip()
+            or "https://api.openai.com/v1"
+        ).rstrip("/")
+        self.target_api_key = _env_first("CODEX_TARGET_API_KEY", "TARGET_API_KEY", "OPENAI_API_KEY")
+        self.upstream_wire_api = (
+            _env_first("CODEX_UPSTREAM_WIRE_API", default="chat_completions").strip().lower()
+            or "chat_completions"
+        )
+        if self.upstream_wire_api not in {"chat_completions", "responses"}:
+            logger.warning("Invalid CODEX_UPSTREAM_WIRE_API=%r; using chat_completions", self.upstream_wire_api)
+            self.upstream_wire_api = "chat_completions"
         self.use_placeholder_mode = _parse_bool("USE_PLACEHOLDER_MODE")
         self.dev_mode = _parse_bool("DEV_MODE")
         self.skip_ssl_verify = _parse_bool("SKIP_SSL_VERIFY")
         self.auto_open_browser = _parse_bool("AUTO_OPEN_BROWSER", "true")
+        self.auto_apply_codex_config = _parse_bool("AUTO_APPLY_CODEX_CONFIG", "true")
+        self.auto_restart_codex_desktop = _parse_bool("AUTO_RESTART_CODEX_DESKTOP", "true")
+        self.codex_app_path = Path(
+            _env_first("CODEX_APP_PATH", default="/Applications/Codex.app")
+        ).expanduser()
 
         # Request behavior.
         self.request_timeout_seconds = _parse_int("OPENAI_REQUEST_TIMEOUT_SECONDS", "600")
@@ -169,7 +214,7 @@ class Config:
         self.enable_duplicate_request_guard = _parse_bool("ENABLE_DUPLICATE_REQUEST_GUARD", "true")
         self.duplicate_request_ttl_seconds = _parse_int("DUPLICATE_REQUEST_TTL_SECONDS", "300")
 
-        # Kilo-facing model configuration.
+        # Codex-facing model configuration.
         self.model_mapping = _parse_model_mapping(os.getenv("MODEL_MAPPING", ""))
         pricing_per_1k = os.getenv("MODEL_PRICING_USD_PER_1K", "")
         legacy_pricing_per_million = os.getenv("MODEL_PRICING_USD_PER_MILLION", "")
@@ -190,16 +235,16 @@ class Config:
             self.model_pricing = {}
             self.model_pricing_unit = "usd_per_1k_tokens"
         configured_models = (
-            os.getenv("MODEL_OPTIONS")
+            os.getenv("CODEX_MODEL_OPTIONS")
+            or os.getenv("MODEL_OPTIONS")
             or os.getenv("OPENAI_MODEL_OPTIONS")
-            or os.getenv("KILO_MODEL_OPTIONS")
             or ""
         )
         self.model_options = _parse_csv(configured_models)
         if not self.model_options:
             self.model_options = list(self.model_mapping.keys()) or list(DEFAULT_MODEL_OPTIONS)
 
-        self.default_model = os.getenv("DEFAULT_MODEL", "").strip() or None
+        self.default_model = _env_first("CODEX_DEFAULT_MODEL", "DEFAULT_MODEL").strip() or None
         if self.default_model and self.model_options and self.default_model not in self.model_options:
             logger.warning(
                 "Ignoring DEFAULT_MODEL=%r because it is not present in MODEL_OPTIONS",
@@ -210,12 +255,14 @@ class Config:
             self.default_model = self.model_options[0]
 
         self.strict_model_allowlist = _parse_bool("STRICT_MODEL_ALLOWLIST")
-        self.kilo_provider_id = os.getenv("KILO_PROVIDER_ID", "openai-compatible").strip() or "openai-compatible"
-        self.model_context_window = _parse_int("MODEL_CONTEXT_WINDOW", "128000")
-        self.model_output_tokens = _parse_int("MODEL_OUTPUT_TOKENS", str(self.default_max_completion_tokens))
-        self.model_supports_tools = _parse_bool("MODEL_SUPPORTS_TOOLS", "true")
-        self.model_supports_reasoning = _parse_bool("MODEL_SUPPORTS_REASONING", "true")
-        self.model_supports_temperature = _parse_bool("MODEL_SUPPORTS_TEMPERATURE", "false")
+        self.codex_provider_id = (
+            _env_first("CODEX_PROVIDER_ID", default="codex-local-proxy").strip()
+            or "codex-local-proxy"
+        )
+        self.codex_provider_name = (
+            _env_first("CODEX_PROVIDER_NAME", default="Codex Local Proxy").strip()
+            or "Codex Local Proxy"
+        )
 
         # OAuth settings.
         self.oauth_token_endpoint = os.getenv("OAUTH_TOKEN_ENDPOINT")
@@ -229,10 +276,27 @@ class Config:
 
     def _generate_token(self) -> str:
         """Generate a random access token for local proxy clients."""
-        return f"kilo-launcher-{secrets.token_hex(32)}"
+        return f"codex-launcher-{secrets.token_hex(32)}"
+
+    def _load_or_generate_proxy_token(self) -> str:
+        """Load the durable local proxy token used by Codex command auth."""
+        try:
+            if self.proxy_token_file.exists():
+                token = self.proxy_token_file.read_text(encoding="utf-8").strip()
+                if token:
+                    return token
+
+            token = self._generate_token()
+            self.proxy_token_file.parent.mkdir(parents=True, exist_ok=True)
+            self.proxy_token_file.write_text(token + "\n", encoding="utf-8")
+            self.proxy_token_file.chmod(0o600)
+            return token
+        except Exception as e:
+            logger.warning("Failed to persist proxy token at %s: %s", self.proxy_token_file, e)
+            return self._generate_token()
 
     def get_public_model_names(self) -> list[str]:
-        """Return Kilo-facing model names exposed by /v1/models."""
+        """Return Codex-facing model names exposed by /v1/models."""
         return list(self.model_options)
 
     def is_known_public_model(self, model: str | None) -> bool:
@@ -241,7 +305,7 @@ class Config:
             return False
         if model in self.model_options:
             return True
-        # Kilo config values are provider/model, but providers usually send only model.
+        # Some config values are provider/model, but providers usually send only model.
         _, _, suffix = model.partition("/")
         return bool(suffix and suffix in self.model_options)
 
@@ -249,7 +313,7 @@ class Config:
         """
         Resolve the model sent upstream.
 
-        Returns (public_model, target_model). public_model is the Kilo-facing
+        Returns (public_model, target_model). public_model is the Codex-facing
         model used for logs and response rewriting; target_model is sent to the
         upstream OpenAI-compatible endpoint.
         """
@@ -275,12 +339,11 @@ class Config:
 
     def apply_completion_token_limit(self, request_payload: dict[str, Any]) -> None:
         """
-        Normalize Kilo/OpenAI token-limit fields for the upstream endpoint.
+        Normalize OpenAI token-limit fields for the upstream endpoint.
 
-        Kilo's OpenAI-compatible provider may send max_tokens based on
-        limit.output. GPT-5-style endpoints commonly expect
-        max_completion_tokens instead, so the default behavior converts
-        max_tokens into max_completion_tokens before forwarding upstream.
+        GPT-5-style Chat Completions endpoints commonly expect
+        max_completion_tokens, so the default behavior converts max_tokens
+        before forwarding upstream.
         """
         target_field = self.completion_token_limit_field
 
@@ -363,37 +426,38 @@ class Config:
         return f"http://localhost:{self.port}"
 
     def get_openai_base_url(self) -> str:
-        """Return the OpenAI-compatible base URL to enter in Kilo."""
+        """Return the OpenAI-compatible base URL Codex should use."""
         return f"{self.get_local_base_url()}/v1"
 
-    def get_kilo_config_snippet(self) -> dict[str, Any]:
-        """Build a kilo.jsonc-compatible config snippet for this proxy."""
-        models = {
-            model: {
-                "name": model,
-                "tool_call": self.model_supports_tools,
-                "reasoning": self.model_supports_reasoning,
-                "temperature": self.model_supports_temperature,
-                "limit": {
-                    "context": self.model_context_window,
-                    "output": self.model_output_tokens,
-                },
-            }
-            for model in self.model_options
-        }
+    def get_responses_url(self) -> str:
+        """Return the Codex-facing Responses API URL."""
+        return f"{self.get_openai_base_url()}/responses"
 
-        default_model = self.default_model or (self.model_options[0] if self.model_options else "your-model")
+    def get_chat_completions_url(self) -> str:
+        """Return the debug/backward-compatible Chat Completions URL."""
+        return f"{self.get_openai_base_url()}/chat/completions"
+
+    def get_models_url(self) -> str:
+        """Return the model listing URL."""
+        return f"{self.get_openai_base_url()}/models"
+
+    def get_codex_config_snippet(self) -> dict[str, Any]:
+        """Build the config.toml fragment managed by this launcher."""
         return {
-            "$schema": "https://app.kilo.ai/config.json",
-            "model": f"{self.kilo_provider_id}/{default_model}",
-            "provider": {
-                self.kilo_provider_id: {
-                    "options": {
-                        "apiKey": "{env:KILO_PROXY_API_KEY}",
-                        "baseURL": self.get_openai_base_url(),
-                        "timeout": self.request_timeout_seconds * 1000,
+            "model": self.default_model,
+            "model_provider": self.codex_provider_id,
+            "model_providers": {
+                self.codex_provider_id: {
+                    "name": self.codex_provider_name,
+                    "base_url": self.get_openai_base_url(),
+                    "wire_api": "responses",
+                    "supports_websockets": False,
+                    "stream_idle_timeout_ms": self.streaming_timeout_seconds * 1000,
+                    "auth": {
+                        "command": "/bin/cat",
+                        "args": [str(self.proxy_token_file)],
+                        "refresh_interval_ms": 0,
                     },
-                    "models": models,
                 }
             },
         }
@@ -405,9 +469,11 @@ class Config:
             "bind_host": self.bind_host,
             "target_endpoint": self.target_endpoint,
             "openai_base_url": self.get_openai_base_url(),
-            "chat_completions_url": f"{self.get_openai_base_url()}/chat/completions",
-            "models_url": f"{self.get_openai_base_url()}/models",
+            "responses_url": self.get_responses_url(),
+            "chat_completions_url": self.get_chat_completions_url(),
+            "models_url": self.get_models_url(),
             "use_placeholder_mode": self.use_placeholder_mode,
+            "upstream_wire_api": self.upstream_wire_api,
             "enable_duplicate_request_guard": self.enable_duplicate_request_guard,
             "duplicate_request_ttl_seconds": self.duplicate_request_ttl_seconds,
             "model_options": self.get_public_model_names(),
@@ -429,12 +495,15 @@ class Config:
             "api_key_configured": self.is_api_key_configured(),
             "dev_mode": self.dev_mode,
             "ssl_enabled": self.ssl_enabled,
-            "kilo_provider_id": self.kilo_provider_id,
-            "model_context_window": self.model_context_window,
-            "model_output_tokens": self.model_output_tokens,
-            "model_supports_tools": self.model_supports_tools,
-            "model_supports_reasoning": self.model_supports_reasoning,
-            "model_supports_temperature": self.model_supports_temperature,
+            "codex_provider_id": self.codex_provider_id,
+            "codex_provider_name": self.codex_provider_name,
+            "codex_home": str(self.codex_home),
+            "codex_config_path": str(self.codex_config_path),
+            "codex_app_path": str(self.codex_app_path),
+            "proxy_token_file": str(self.proxy_token_file),
+            "auto_apply_codex_config": self.auto_apply_codex_config,
+            "auto_restart_codex_desktop": self.auto_restart_codex_desktop,
+            "codex_config_snippet": self.get_codex_config_snippet(),
         }
 
 

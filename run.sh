@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run Kilo-Launcher
+# Run Codex Local Proxy Launcher.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -19,8 +19,7 @@ if [ ! -f "src/.env" ]; then
     echo "No .env file found. Copying from .env.example..."
     if [ -f "src/.env.example" ]; then
         cp src/.env.example src/.env
-        echo "Please edit src/.env with your endpoint, auth, and model settings, then run again."
-        exit 1
+        echo "Created src/.env with default settings. Edit it for your upstream endpoint/auth as needed."
     fi
 fi
 

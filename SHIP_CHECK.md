@@ -1,54 +1,58 @@
-# Kilo/OpenAI Compatibility Check
+# Codex Local Proxy Compatibility Check
 
-Checked June 12, 2026.
+Checked June 17, 2026.
 
-## Kilo Code Expectations
+## Codex Desktop Expectations
 
-- Kilo supports custom providers backed by OpenAI-compatible APIs.
-- The custom provider dialog asks for provider ID, display name, base URL, API key, optional headers, and models.
-- When a valid OpenAI-compatible base URL is entered, Kilo can fetch models from the endpoint.
-- Kilo model references use `provider_id/model_id`.
-- Custom provider config supports provider-level `options.apiKey`, `options.baseURL`, and `options.timeout`.
-- Per-model config should set `tool_call` and `limit.context` / `limit.output`.
-- Kilo documents that OpenAI-compatible providers may send `max_tokens` from `limit.output`; GPT-5-style endpoints may expect `max_completion_tokens`.
+- User-level `~/.codex/config.toml` is the source of truth for custom provider and auth configuration.
+- Custom providers must use `wire_api = "responses"` in current Codex Desktop; `wire_api = "chat"` is rejected.
+- Provider auth can be supplied by a command, which lets Codex read a local token without relying on shell environment variables.
+- Codex Desktop should call the configured provider at `<base_url>/responses` and discover models from `<base_url>/models`.
 
 Implementation coverage:
 
-- `GET /v1/models` returns OpenAI-shaped model objects from `MODEL_OPTIONS`.
-- The dashboard shows and copies the generated Kilo spec for provider/model setup.
-- The dashboard shows Kilo-facing models, upstream mappings, and configured per-1K-token pricing.
-- Recent dashboard calls expand to show sanitized request/response details and inline error messages.
-- The proxy accepts either `model` or `provider/model` and maps to upstream with `MODEL_MAPPING`.
-- `max_tokens` is converted to `max_completion_tokens` by default.
-- Missing token limits are filled with `DEFAULT_MAX_COMPLETION_TOKENS`.
+- `GET /v1/models` returns OpenAI-shaped model objects from `CODEX_MODEL_OPTIONS`.
+- `POST /v1/responses` is the primary Codex-facing generation endpoint.
+- The managed config writes `model`, `model_provider`, `[model_providers.<id>]`, and `[model_providers.<id>.auth]`.
+- The proxy token is stored at `~/.codex/codex-launcher/proxy_token` with `0600` permissions.
+- Applying config writes a timestamped full backup and a state file for restore.
+- Restoring config preserves unrelated `config.toml` content and reinstates the previous model/provider/provider table.
 
 ## OpenAI-Compatible Endpoint Expectations
 
-- Chat completions are sent to `/v1/chat/completions`.
-- Streaming uses server-sent events and terminates with `data: [DONE]`.
+- Responses requests can be passed through to `/v1/responses` when the upstream supports it.
+- Responses requests can be translated to `/v1/chat/completions` for upstreams that only support Chat Completions.
+- Streaming uses server-sent events.
 - Model listing uses `/v1/models`.
-- `max_completion_tokens` is the modern completion limit field; `max_tokens` is deprecated for newer models.
+- Chat Completions upstreams may require `max_completion_tokens` rather than legacy `max_tokens`.
 
 Implementation coverage:
 
-- The proxy uses the OpenAI Python SDK with `base_url=TARGET_ENDPOINT`.
-- Upstream auth is the same bearer-token model as `cc-launcher`: OAuth client credentials first, then `TARGET_API_KEY` / `OPENAI_API_KEY`.
-- SSL handling keeps the same optional enterprise certificate setup and `SKIP_SSL_VERIFY` behavior.
-- Non-streaming and streaming responses stay OpenAI-shaped when returned to Kilo.
+- `CODEX_UPSTREAM_WIRE_API=chat_completions` translates Responses requests into Chat Completions requests.
+- `CODEX_UPSTREAM_WIRE_API=responses` forwards Responses requests with local auth stripped and upstream auth applied.
+- Text input, `instructions`, function tools, function-call outputs, `tool_choice`, `max_output_tokens`, usage, and streaming deltas are covered by tests.
+- Hosted built-in Responses tools are rejected with an OpenAI-compatible error in Chat Completions adapter mode.
+- The debug `/v1/chat/completions` endpoint preserves model mapping, token-limit normalization, streaming, and duplicate-request guard behavior.
 
 ## Internal Endpoint Setup
 
-Copy these shared values from `cc-launcher/src/.env` when setting up work:
+Configure these values in `src/.env`:
 
-- `TARGET_ENDPOINT`
-- `TARGET_API_KEY` or the `OAUTH_*` values
-- `PROXY_PORT` if you want the same local port
-- `SKIP_SSL_VERIFY` / certificate settings if needed
-
-Then fill in:
-
-- `MODEL_OPTIONS`
+- `CODEX_TARGET_ENDPOINT`
+- `CODEX_TARGET_API_KEY` or the `OAUTH_*` values
+- `CODEX_UPSTREAM_WIRE_API`
+- `CODEX_MODEL_OPTIONS`
 - `MODEL_MAPPING`
 - `MODEL_PRICING_USD_PER_1K`
-- `DEFAULT_MODEL`
+- `CODEX_DEFAULT_MODEL`
 - `DEFAULT_MAX_COMPLETION_TOKENS`
+
+To chain through an existing local proxy, set `CODEX_TARGET_ENDPOINT` to that proxy's `/v1` base URL, keep `CODEX_UPSTREAM_WIRE_API=chat_completions`, and set `CODEX_TARGET_API_KEY` to the upstream proxy token.
+
+## Validation
+
+- `python3 -m unittest discover -s tests -v`
+- `./run-dev.sh` with placeholder mode
+- `codex doctor --strict-config`
+- `codex exec --model gpt-5.5 "reply with ok"`
+- Launch Codex Desktop and confirm dashboard logs show `POST /v1/responses`

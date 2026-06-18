@@ -3,22 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kilo-Launcher</title>
+    <title>Codex Local Proxy</title>
     <style>
         :root {
-            --bg: #f6f7f9;
+            --bg: #f5f6f8;
             --surface: #ffffff;
-            --surface-alt: #f1f3f5;
-            --border: #dfe3e8;
-            --text: #111827;
-            --muted: #6b7280;
-            --accent: #2563eb;
-            --accent-light: #eff6ff;
-            --success: #047857;
-            --success-light: #ecfdf5;
-            --error: #b91c1c;
-            --error-light: #fef2f2;
-            --warning: #b45309;
+            --surface-alt: #f0f2f5;
+            --border: #d9dee7;
+            --text: #17202c;
+            --muted: #667085;
+            --accent: #0f766e;
+            --accent-light: #e6f4f1;
+            --danger: #b42318;
+            --warning: #b54708;
+            --success: #067647;
             --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
         }
 
@@ -26,15 +24,14 @@
 
         body {
             margin: 0;
-            min-height: 100vh;
             background: var(--bg);
             color: var(--text);
-            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            line-height: 1.5;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            line-height: 1.45;
         }
 
         .page {
-            width: min(1180px, calc(100vw - 32px));
+            width: min(1220px, calc(100vw - 32px));
             margin: 0 auto;
             padding: 24px 0 40px;
         }
@@ -44,58 +41,46 @@
             align-items: center;
             justify-content: space-between;
             gap: 16px;
-            margin-bottom: 20px;
-        }
-
-        .brand {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .mark {
-            width: 36px;
-            height: 36px;
-            display: grid;
-            place-items: center;
-            border-radius: 8px;
-            background: var(--accent);
-            color: #fff;
-            font-weight: 700;
-            font-size: 13px;
+            margin-bottom: 16px;
         }
 
         h1 {
             margin: 0;
-            font-size: 18px;
+            font-size: 20px;
             line-height: 1.2;
         }
 
         .subtitle {
-            margin-top: 2px;
+            margin-top: 4px;
             color: var(--muted);
-            font-size: 12px;
+            font-size: 13px;
         }
 
-        .status {
-            display: inline-flex;
-            align-items: center;
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
             gap: 8px;
-            padding: 6px 10px;
-            border-radius: 999px;
-            background: var(--success-light);
-            color: var(--success);
-            font-size: 12px;
-            font-weight: 600;
         }
 
-        .status::before {
-            content: "";
-            width: 7px;
-            height: 7px;
-            border-radius: 999px;
-            background: var(--success);
+        button {
+            min-height: 34px;
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            background: var(--surface);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 7px 11px;
         }
+
+        button.primary {
+            border-color: var(--accent);
+            background: var(--accent);
+            color: #fff;
+        }
+
+        button:hover { filter: brightness(0.98); }
 
         .grid {
             display: grid;
@@ -104,29 +89,21 @@
             margin-bottom: 14px;
         }
 
-        @media (max-width: 980px) {
-            .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        }
-
-        @media (max-width: 680px) {
-            .page { width: min(100vw - 20px, 1180px); padding-top: 16px; }
-            header { align-items: flex-start; flex-direction: column; }
-            .grid { grid-template-columns: 1fr; }
-        }
+        .wide { margin-bottom: 14px; }
 
         .panel {
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: 8px;
-            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+            overflow: hidden;
         }
 
         .panel-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 10px;
-            padding: 13px 14px;
+            gap: 12px;
+            padding: 12px 14px;
             border-bottom: 1px solid var(--border);
         }
 
@@ -146,10 +123,10 @@
 
         .row {
             display: grid;
-            grid-template-columns: 112px minmax(0, 1fr);
+            grid-template-columns: 130px minmax(0, 1fr);
             gap: 10px;
             align-items: center;
-            min-height: 26px;
+            min-height: 27px;
         }
 
         .label {
@@ -158,22 +135,37 @@
         }
 
         .value {
-            overflow: hidden;
             min-width: 0;
-            padding: 4px 7px;
+            overflow: hidden;
+            padding: 5px 7px;
             border-radius: 6px;
             background: var(--surface-alt);
-            color: var(--text);
             font-family: var(--mono);
             font-size: 11px;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
 
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border-radius: 999px;
+            padding: 5px 9px;
+            background: var(--surface-alt);
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .badge.ok { background: #ecfdf3; color: var(--success); }
+        .badge.warn { background: #fff6e5; color: var(--warning); }
+        .badge.err { background: #fef3f2; color: var(--danger); }
+
         .stats {
             display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 8px;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
         }
 
         .stat {
@@ -183,24 +175,14 @@
         }
 
         .stat-label {
-            margin-bottom: 2px;
             color: var(--muted);
             font-size: 11px;
         }
 
         .stat-value {
-            font-size: 17px;
-            font-weight: 700;
-        }
-
-        .span-2 { grid-column: span 2; }
-
-        .wide {
-            margin-bottom: 14px;
-        }
-
-        .table-wrap {
-            overflow-x: auto;
+            margin-top: 3px;
+            font-size: 18px;
+            font-weight: 750;
         }
 
         table {
@@ -209,700 +191,272 @@
             font-size: 12px;
         }
 
-        th {
-            color: var(--muted);
-            font-size: 11px;
-            font-weight: 700;
-            text-align: left;
-            text-transform: uppercase;
-        }
-
-        th,
-        td {
+        th, td {
             padding: 9px 10px;
             border-bottom: 1px solid var(--border);
+            text-align: left;
             vertical-align: top;
         }
 
-        tr:last-child td {
-            border-bottom: 0;
+        th {
+            color: var(--muted);
+            font-size: 11px;
+            text-transform: uppercase;
         }
 
-        td.mono {
+        td.mono, pre {
             font-family: var(--mono);
             font-size: 11px;
         }
 
-        .muted {
-            color: var(--muted);
-        }
-
-        .spec-actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        .setup-note {
-            display: grid;
-            grid-template-columns: 112px minmax(0, 1fr);
-            gap: 10px;
-            margin-bottom: 12px;
-            padding: 10px;
-            border-radius: 7px;
-            background: var(--accent-light);
-        }
-
-        .setup-note .label {
-            font-weight: 700;
-        }
-
-        .setup-note .value {
-            background: #fff;
-            text-overflow: clip;
-            white-space: normal;
-        }
-
-        .spec-json {
-            max-height: 340px;
+        pre {
+            max-height: 320px;
             overflow: auto;
             margin: 0;
             padding: 12px;
             border-radius: 7px;
             background: #111827;
-            color: #e5e7eb;
-            font-family: var(--mono);
-            font-size: 11px;
-            line-height: 1.55;
-            white-space: pre;
+            color: #f9fafb;
         }
-
-        .actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        button {
-            border: 1px solid var(--border);
-            border-radius: 7px;
-            background: var(--surface);
-            color: var(--text);
-            cursor: pointer;
-            font: inherit;
-            font-size: 12px;
-            font-weight: 600;
-            padding: 7px 10px;
-        }
-
-        button:hover { background: var(--surface-alt); }
-
-        button.primary {
-            border-color: var(--accent);
-            background: var(--accent);
-            color: #fff;
-        }
-
-        button.primary:hover { background: #1d4ed8; }
 
         .logs {
-            max-height: 560px;
-            overflow: auto;
-        }
-
-        .log-item {
-            border-bottom: 1px solid var(--border);
-        }
-
-        .log-item:last-child {
-            border-bottom: 0;
-        }
-
-        .log-summary {
-            width: 100%;
             display: grid;
-            grid-template-columns: 22px 76px 54px minmax(140px, 1.2fr) minmax(160px, 1fr) 62px 76px;
-            gap: 10px;
+            gap: 8px;
+        }
+
+        .log {
+            display: grid;
+            grid-template-columns: 74px 54px minmax(120px, 1fr) 64px 76px;
+            gap: 8px;
             align-items: center;
-            margin: 0;
-            padding: 10px 14px;
-            border: 0;
-            border-radius: 0;
-            background: transparent;
-            color: var(--text);
-            font-size: 12px;
-            font-weight: 400;
-            text-align: left;
-        }
-
-        .log-summary:hover,
-        .log-item.open .log-summary {
-            background: var(--surface-alt);
-        }
-
-        .expand-indicator {
-            display: grid;
-            width: 18px;
-            height: 18px;
-            place-items: center;
-            border: 1px solid var(--border);
-            border-radius: 999px;
-            color: var(--muted);
-            font-family: var(--mono);
-            font-size: 11px;
-            font-weight: 700;
-        }
-
-        .log-time,
-        .method,
-        .path,
-        .duration,
-        .log-message {
-            font-family: var(--mono);
-        }
-
-        .log-time,
-        .duration,
-        .log-message {
-            color: var(--muted);
-            font-size: 11px;
-        }
-
-        .method {
-            color: var(--accent);
-            font-size: 11px;
-            font-weight: 700;
-        }
-
-        .path,
-        .log-message {
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            min-width: 0;
-        }
-
-        .log-message.error-text {
-            color: var(--error);
-            font-weight: 700;
-        }
-
-        .code {
-            justify-self: start;
-            padding: 2px 6px;
-            border-radius: 999px;
-            font-family: var(--mono);
-            font-size: 11px;
-            font-weight: 700;
-        }
-
-        .code.ok {
-            background: var(--success-light);
-            color: var(--success);
-        }
-
-        .code.err {
-            background: var(--error-light);
-            color: var(--error);
-        }
-
-        .log-detail {
-            padding: 0 14px 14px 46px;
-        }
-
-        .log-detail-inner {
-            display: grid;
-            gap: 12px;
-            padding-top: 12px;
-            border-top: 1px solid var(--border);
-        }
-
-        .detail-meta {
-            display: grid;
-            grid-template-columns: repeat(5, minmax(0, 1fr));
-            gap: 12px;
-        }
-
-        .detail-label {
-            color: var(--muted);
-            font-size: 11px;
-        }
-
-        .detail-value {
-            overflow: hidden;
-            font-family: var(--mono);
-            font-size: 11px;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .error-banner {
-            padding: 9px 10px;
-            border: 1px solid #fecaca;
+            padding: 8px 10px;
             border-radius: 7px;
-            background: var(--error-light);
-            color: var(--error);
-            font-size: 12px;
-            font-weight: 700;
-        }
-
-        .detail-columns {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
-        }
-
-        .detail-block {
-            min-width: 0;
-        }
-
-        .detail-title {
-            margin-bottom: 6px;
-            color: var(--muted);
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-        }
-
-        .log-json {
-            max-height: 260px;
-            overflow: auto;
-            margin: 0;
-            padding: 10px;
-            border-radius: 6px;
-            background: #111827;
-            color: #e5e7eb;
-            font-family: var(--mono);
-            font-size: 11px;
-            line-height: 1.55;
-            white-space: pre-wrap;
-            word-break: break-word;
-        }
-
-        .log-json.empty-json {
             background: var(--surface-alt);
-            color: var(--muted);
+            font-size: 12px;
         }
 
         .empty {
-            padding: 32px 14px;
+            padding: 16px;
             color: var(--muted);
             font-size: 13px;
             text-align: center;
         }
 
-        @media (max-width: 760px) {
-            .log-summary {
-                grid-template-columns: 22px 64px 44px minmax(0, 1fr) 54px;
-            }
+        .mono { font-family: var(--mono); }
+        .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-            .expand-indicator { grid-column: 1; grid-row: 1 / span 2; }
-            .log-time { grid-column: 2; grid-row: 1; }
-            .method { grid-column: 3; grid-row: 1; }
-            .path { grid-column: 4; grid-row: 1; }
-            .code { grid-column: 5; grid-row: 1; }
-            .log-message { grid-column: 2 / 6; grid-row: 2; }
-            .duration { display: none; }
-            .log-detail { padding-left: 14px; }
-            .detail-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .detail-columns { grid-template-columns: 1fr; }
-            .setup-note { grid-template-columns: 1fr; }
+        @media (max-width: 980px) {
+            .grid { grid-template-columns: 1fr; }
+            .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            header { align-items: flex-start; flex-direction: column; }
+        }
+
+        @media (max-width: 640px) {
+            .page { width: min(100vw - 20px, 1220px); }
+            .row { grid-template-columns: 1fr; gap: 4px; }
+            .log { grid-template-columns: 1fr 1fr; }
         }
     </style>
 </head>
 <body>
     <div class="page">
         <header>
-            <div class="brand">
-                <div class="mark">KL</div>
-                <div>
-                    <h1>Kilo-Launcher</h1>
-                    <div class="subtitle">OpenAI-compatible local proxy</div>
-                </div>
+            <div>
+                <h1>Codex Local Proxy</h1>
+                <div class="subtitle">Responses-compatible Codex Desktop proxy with local config management.</div>
             </div>
             <div class="actions">
-                <button class="primary" onclick="copyKiloSpec()">Copy Kilo Spec</button>
+                <button class="primary" onclick="applyConfig()">Apply Config</button>
+                <button onclick="restoreConfig()">Restore Config</button>
+                <button onclick="restartCodex()">Restart Codex</button>
+                <button onclick="smokeTest()">Smoke Test</button>
                 <button onclick="refreshAll()">Refresh</button>
-                <span class="status">Active</span>
             </div>
         </header>
 
-        <section class="grid">
-            <div class="panel">
+        <div class="grid">
+            <section class="panel">
                 <div class="panel-header">
-                    <div class="panel-title">Kilo Settings</div>
+                    <div class="panel-title">Proxy</div>
+                    <span class="badge ok" id="proxyBadge">running</span>
                 </div>
                 <div class="panel-body rows">
-                    <div class="row">
-                        <div class="label">Provider</div>
-                        <div class="value">OpenAI Compatible</div>
-                    </div>
-                    <div class="row">
-                        <div class="label">Base URL</div>
-                        <div class="value" id="baseUrl">-</div>
-                    </div>
-                    <div class="row">
-                        <div class="label">API Key</div>
-                        <div class="value" id="apiKey">-</div>
-                    </div>
-                    <div class="row">
-                        <div class="label">Models URL</div>
-                        <div class="value" id="modelsUrl">-</div>
-                    </div>
+                    <div class="row"><div class="label">Base URL</div><div class="value" id="baseUrl">-</div></div>
+                    <div class="row"><div class="label">Responses</div><div class="value" id="responsesUrl">-</div></div>
+                    <div class="row"><div class="label">Models</div><div class="value" id="modelsUrl">-</div></div>
+                    <div class="row"><div class="label">Token</div><div class="value" id="tokenPreview">-</div></div>
                 </div>
-            </div>
+            </section>
 
-            <div class="panel">
+            <section class="panel">
                 <div class="panel-header">
-                    <div class="panel-title">Target</div>
+                    <div class="panel-title">Upstream</div>
+                    <span class="badge" id="upstreamBadge">-</span>
                 </div>
                 <div class="panel-body rows">
-                    <div class="row">
-                        <div class="label">Endpoint</div>
-                        <div class="value" id="targetEndpoint">-</div>
-                    </div>
-                    <div class="row">
-                        <div class="label">Mode</div>
-                        <div class="value" id="proxyMode">-</div>
-                    </div>
-                    <div class="row">
-                        <div class="label">Auth</div>
-                        <div class="value" id="authType">-</div>
-                    </div>
-                    <div class="row">
-                        <div class="label">SSL</div>
-                        <div class="value" id="sslState">-</div>
-                    </div>
+                    <div class="row"><div class="label">Endpoint</div><div class="value" id="targetEndpoint">-</div></div>
+                    <div class="row"><div class="label">Wire API</div><div class="value" id="upstreamWireApi">-</div></div>
+                    <div class="row"><div class="label">Auth</div><div class="value" id="authType">-</div></div>
+                    <div class="row"><div class="label">SSL</div><div class="value" id="sslState">-</div></div>
                 </div>
-            </div>
+            </section>
 
-            <div class="panel">
+            <section class="panel">
                 <div class="panel-header">
-                    <div class="panel-title">Usage</div>
+                    <div class="panel-title">Codex Desktop</div>
+                    <span class="badge" id="codexBadge">-</span>
                 </div>
-                <div class="panel-body stats">
-                    <div class="stat">
-                        <div class="stat-label">Requests</div>
-                        <div class="stat-value" id="totalRequests">0</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-label">Success</div>
-                        <div class="stat-value" id="successRate">100%</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-label">Input Tokens</div>
-                        <div class="stat-value" id="inputTokens">0</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-label">Output Tokens</div>
-                        <div class="stat-value" id="outputTokens">0</div>
-                    </div>
-                    <div class="stat span-2">
-                        <div class="stat-label">Estimated Session Cost</div>
-                        <div class="stat-value" id="totalCost">$0.0000</div>
-                    </div>
+                <div class="panel-body rows">
+                    <div class="row"><div class="label">Provider</div><div class="value" id="codexProvider">-</div></div>
+                    <div class="row"><div class="label">Model</div><div class="value" id="codexModel">-</div></div>
+                    <div class="row"><div class="label">Config</div><div class="value" id="codexConfigPath">-</div></div>
+                    <div class="row"><div class="label">Token File</div><div class="value" id="tokenFile">-</div></div>
                 </div>
+            </section>
+        </div>
+
+        <section class="panel wide">
+            <div class="panel-header">
+                <div class="panel-title">Usage</div>
+                <button onclick="clearLogs()">Clear Logs</button>
+            </div>
+            <div class="panel-body stats">
+                <div class="stat"><div class="stat-label">Requests</div><div class="stat-value" id="totalRequests">0</div></div>
+                <div class="stat"><div class="stat-label">Success Rate</div><div class="stat-value" id="successRate">100%</div></div>
+                <div class="stat"><div class="stat-label">Input Tokens</div><div class="stat-value" id="inputTokens">0</div></div>
+                <div class="stat"><div class="stat-label">Output Tokens</div><div class="stat-value" id="outputTokens">0</div></div>
             </div>
         </section>
 
         <section class="panel wide">
             <div class="panel-header">
-                <div class="panel-title">Kilo Spec</div>
-                <div class="spec-actions">
-                    <button onclick="copyKiloSpec()">Copy Spec</button>
-                    <button onclick="copyKiloBaseUrl()">Copy Base URL</button>
-                </div>
+                <div class="panel-title">Models</div>
+            </div>
+            <div id="modelTable"></div>
+        </section>
+
+        <section class="panel wide">
+            <div class="panel-header">
+                <div class="panel-title">Managed Codex Config</div>
+                <button onclick="copyConfig()">Copy</button>
             </div>
             <div class="panel-body">
-                <div class="setup-note">
-                    <div class="label">Load Path</div>
-                    <div class="value">Kilo Code settings -> Providers -> OpenAI Compatible</div>
-                    <div class="label">Use</div>
-                    <div class="value">Base URL, API key, then the model names/spec below</div>
-                </div>
-                <pre class="spec-json" id="kiloSpec">{}</pre>
+                <pre id="managedConfig">{}</pre>
             </div>
         </section>
 
         <section class="panel wide">
             <div class="panel-header">
-                <div class="panel-title">Models & Pricing</div>
+                <div class="panel-title">Recent API Calls</div>
             </div>
             <div class="panel-body">
-                <div class="table-wrap" id="modelPricingTable"></div>
+                <div class="logs" id="logs"></div>
             </div>
-        </section>
-
-        <section class="panel">
-            <div class="panel-header">
-                <div class="panel-title">Recent Calls</div>
-                <button onclick="clearLogs()">Clear</button>
-            </div>
-            <div class="logs" id="logs"></div>
         </section>
     </div>
 
     <script>
-        const expandedLogs = new Set();
-        let lastApiCalls = [];
         let lastConfig = {};
-        let lastKiloSpec = {};
 
-        function text(id, value) {
+        function setText(id, value) {
             document.getElementById(id).textContent = value ?? "-";
         }
 
-        function escapeHtml(value) {
-            return String(value ?? "")
-                .replaceAll("&", "&amp;")
-                .replaceAll("<", "&lt;")
-                .replaceAll(">", "&gt;")
-                .replaceAll('"', "&quot;")
-                .replaceAll("'", "&#39;");
+        function badge(id, state, text) {
+            const el = document.getElementById(id);
+            el.className = `badge ${state || ""}`;
+            el.textContent = text;
         }
 
         function fmtNumber(value) {
-            return Number(value || 0).toLocaleString();
-        }
-
-        function fmtCurrency(value) {
-            return `$${Number(value || 0).toFixed(4)}`;
+            return new Intl.NumberFormat().format(value || 0);
         }
 
         function fmtPrice(value) {
-            if (value === null || value === undefined) return '<span class="muted">not set</span>';
-            return `$${Number(value).toFixed(4)}`;
-        }
-
-        function fmtDuration(value) {
-            return `${Number(value || 0)}ms`;
+            return value === null || value === undefined ? "-" : `$${Number(value).toFixed(4)}`;
         }
 
         function fmtTime(timestamp) {
-            return new Date(timestamp * 1000).toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit"
-            });
-        }
-
-        function logKey(entry) {
-            return [
-                entry.timestamp,
-                entry.method,
-                entry.path,
-                entry.status,
-                entry.duration_ms
-            ].join("|");
-        }
-
-        function extractErrorMessage(data) {
-            if (!data) return "";
-            if (typeof data === "string") return data;
-            if (typeof data !== "object") return "";
-
-            const error = data.error;
-            if (typeof error === "string") return error;
-            if (error && typeof error === "object") {
-                return error.message || error.detail || error.error_description || error.code || "";
-            }
-            return data.message || data.detail || data.error_description || "";
-        }
-
-        function getErrorMessage(entry) {
-            return entry.error_message || extractErrorMessage(entry.response) || "Request failed";
-        }
-
-        function fmtSummaryMessage(entry, ok) {
-            if (!ok) return getErrorMessage(entry);
-
-            const input = Number(entry.input_tokens || 0);
-            const output = Number(entry.output_tokens || 0);
-            const cost = Number(entry.cost_usd || 0);
-            const parts = [];
-
-            if (input || output) {
-                parts.push(`${fmtNumber(input)} in / ${fmtNumber(output)} out`);
-            }
-            if (cost) {
-                parts.push(fmtCurrency(cost));
-            }
-
-            return parts.join(" - ") || "OK";
-        }
-
-        function formatJson(value) {
-            if (value === null || value === undefined) {
-                return '<pre class="log-json empty-json">Not captured</pre>';
-            }
-            return `<pre class="log-json">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
-        }
-
-        function renderDetailMeta(label, value) {
-            return `
-                <div>
-                    <div class="detail-label">${escapeHtml(label)}</div>
-                    <div class="detail-value" title="${escapeHtml(value)}">${escapeHtml(value)}</div>
-                </div>
-            `;
-        }
-
-        function renderLogDetail(entry, ok, errorMessage) {
-            const tokens = `${fmtNumber(entry.input_tokens || 0)} input / ${fmtNumber(entry.output_tokens || 0)} output`;
-            const cost = fmtCurrency(entry.cost_usd || 0);
-            const rawLog = {
-                timestamp: entry.timestamp,
-                method: entry.method,
-                path: entry.path,
-                status: entry.status,
-                duration_ms: entry.duration_ms,
-                error_message: entry.error_message || "",
-                input_tokens: entry.input_tokens || 0,
-                output_tokens: entry.output_tokens || 0,
-                cost_usd: entry.cost_usd || 0,
-                request: entry.request,
-                response: entry.response
-            };
-
-            return `
-                <div class="log-detail">
-                    <div class="log-detail-inner">
-                        ${ok ? "" : `<div class="error-banner">${escapeHtml(errorMessage)}</div>`}
-                        <div class="detail-meta">
-                            ${renderDetailMeta("Method", entry.method || "-")}
-                            ${renderDetailMeta("Status", String(entry.status ?? "-"))}
-                            ${renderDetailMeta("Duration", fmtDuration(entry.duration_ms))}
-                            ${renderDetailMeta("Tokens", tokens)}
-                            ${renderDetailMeta("Cost", cost)}
-                        </div>
-                        <div class="detail-columns">
-                            <div class="detail-block">
-                                <div class="detail-title">Request</div>
-                                ${formatJson(entry.request)}
-                            </div>
-                            <div class="detail-block">
-                                <div class="detail-title">Response</div>
-                                ${formatJson(entry.response)}
-                            </div>
-                        </div>
-                        <div class="detail-block">
-                            <div class="detail-title">Full Log</div>
-                            ${formatJson(rawLog)}
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderLogEntry(entry) {
-            const ok = entry.status < 400;
-            const key = logKey(entry);
-            const expanded = expandedLogs.has(key);
-            const errorMessage = ok ? "" : getErrorMessage(entry);
-            const summaryMessage = fmtSummaryMessage(entry, ok);
-
-            return `
-                <div class="log-item ${expanded ? "open" : ""}">
-                    <button class="log-summary" type="button" data-log-key="${escapeHtml(key)}" aria-expanded="${expanded}">
-                        <span class="expand-indicator">${expanded ? "-" : "+"}</span>
-                        <span class="log-time">${fmtTime(entry.timestamp)}</span>
-                        <span class="method">${escapeHtml(entry.method)}</span>
-                        <span class="path" title="${escapeHtml(entry.path)}">${escapeHtml(entry.path)}</span>
-                        <span class="log-message ${ok ? "" : "error-text"}" title="${escapeHtml(summaryMessage)}">
-                            ${escapeHtml(summaryMessage)}
-                        </span>
-                        <span class="code ${ok ? "ok" : "err"}">${escapeHtml(entry.status)}</span>
-                        <span class="duration">${fmtDuration(entry.duration_ms)}</span>
-                    </button>
-                    ${expanded ? renderLogDetail(entry, ok, errorMessage) : ""}
-                </div>
-            `;
-        }
-
-        function renderLogs(calls) {
-            const logs = document.getElementById("logs");
-            if (!calls.length) {
-                logs.innerHTML = '<div class="empty">No API calls yet</div>';
-                return;
-            }
-            logs.innerHTML = calls.map(renderLogEntry).join("");
-        }
-
-        function toggleLogDetail(key) {
-            if (expandedLogs.has(key)) {
-                expandedLogs.delete(key);
-            } else {
-                expandedLogs.add(key);
-            }
-            renderLogs(lastApiCalls);
+            return new Date(timestamp * 1000).toLocaleTimeString();
         }
 
         async function fetchJson(url, options = {}) {
             const response = await fetch(url, options);
-            if (!response.ok) throw new Error(`${url} returned ${response.status}`);
-            return response.json();
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(body.error || `${url} returned ${response.status}`);
+            return body;
         }
 
         async function loadConfig() {
             const config = await fetchJson("/api/config");
             lastConfig = config;
-            lastKiloSpec = config.kiloSpec || {};
-            text("baseUrl", config.openaiBaseUrl);
-            text("apiKey", config.accessTokenPreview);
-            text("modelsUrl", config.models_url || config.modelsUrl);
-            text("targetEndpoint", config.target_endpoint);
-            text("proxyMode", config.use_placeholder_mode ? "placeholder" : "proxy");
-            text("kiloSpec", JSON.stringify(lastKiloSpec, null, 2));
+            const codex = config.codexStatus || {};
 
-            const auth = config.oauth_configured
-                ? "oauth"
-                : (config.api_key_configured ? "api key" : (config.dev_mode ? "dev" : "none"));
-            text("authType", auth);
-            text("sslState", config.ssl_enabled ? "enabled" : "disabled");
+            setText("baseUrl", config.openaiBaseUrl);
+            setText("responsesUrl", config.responses_url);
+            setText("modelsUrl", config.models_url);
+            setText("tokenPreview", config.accessTokenPreview);
+            setText("targetEndpoint", config.target_endpoint);
+            setText("upstreamWireApi", config.upstream_wire_api);
+            setText("sslState", config.ssl_enabled ? "enabled" : "disabled");
+            setText("codexProvider", codex.current_model_provider || config.codex_provider_id);
+            setText("codexModel", codex.current_model || config.default_model);
+            setText("codexConfigPath", codex.config_path);
+            setText("tokenFile", config.proxyTokenFile);
+            setText("managedConfig", JSON.stringify(config.codexConfig || {}, null, 2));
 
-            const table = document.getElementById("modelPricingTable");
+            const auth = config.oauth_configured ? "oauth" : (config.api_key_configured ? "api key" : (config.dev_mode ? "dev" : "none"));
+            setText("authType", auth);
+            badge("upstreamBadge", config.use_placeholder_mode ? "warn" : "ok", config.use_placeholder_mode ? "placeholder" : "proxy");
+            badge("codexBadge", codex.is_applied ? "ok" : "warn", codex.is_applied ? "applied" : "not applied");
+
             const rows = config.model_pricing_table || [];
+            const table = document.getElementById("modelTable");
             if (!rows.length) {
                 table.innerHTML = '<div class="empty">No models configured</div>';
-                return;
+            } else {
+                table.innerHTML = `
+                    <table>
+                        <thead><tr><th>Codex Model</th><th>Upstream Model</th><th>Input / 1K</th><th>Output / 1K</th></tr></thead>
+                        <tbody>
+                            ${rows.map((row) => `
+                                <tr>
+                                    <td class="mono">${row.model}</td>
+                                    <td class="mono">${row.target_model}</td>
+                                    <td class="mono">${fmtPrice(row.input_cost_per_1k)}</td>
+                                    <td class="mono">${fmtPrice(row.output_cost_per_1k)}</td>
+                                </tr>
+                            `).join("")}
+                        </tbody>
+                    </table>`;
             }
-            table.innerHTML = `
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Kilo Model</th>
-                            <th>Internal Model</th>
-                            <th>Input / 1K</th>
-                            <th>Output / 1K</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${rows.map((row) => `
-                            <tr>
-                                <td class="mono">${escapeHtml(row.model)}</td>
-                                <td class="mono">${escapeHtml(row.target_model)}</td>
-                                <td class="mono">${fmtPrice(row.input_cost_per_1k)}</td>
-                                <td class="mono">${fmtPrice(row.output_cost_per_1k)}</td>
-                            </tr>
-                        `).join("")}
-                    </tbody>
-                </table>
-            `;
         }
 
         async function loadUsage() {
             const usage = await fetchJson("/api/usage");
-            text("totalRequests", fmtNumber(usage.total_requests));
-            text("successRate", `${usage.success_rate}%`);
-            text("inputTokens", fmtNumber(usage.total_input_tokens));
-            text("outputTokens", fmtNumber(usage.total_output_tokens));
-            text("totalCost", fmtCurrency(usage.total_cost_usd));
+            setText("totalRequests", fmtNumber(usage.total_requests));
+            setText("successRate", `${usage.success_rate}%`);
+            setText("inputTokens", fmtNumber(usage.total_input_tokens));
+            setText("outputTokens", fmtNumber(usage.total_output_tokens));
         }
 
         async function loadLogs() {
-            const data = await fetchJson("/api/logs?limit=80");
-            lastApiCalls = data.apiCalls || [];
-            renderLogs(lastApiCalls);
+            const data = await fetchJson("/api/logs?limit=40");
+            const calls = data.apiCalls || [];
+            const logs = document.getElementById("logs");
+            if (!calls.length) {
+                logs.innerHTML = '<div class="empty">No API calls yet</div>';
+                return;
+            }
+            logs.innerHTML = calls.map((entry) => `
+                <div class="log">
+                    <div class="mono">${fmtTime(entry.timestamp)}</div>
+                    <div class="mono">${entry.method}</div>
+                    <div class="truncate" title="${entry.path}">${entry.path}</div>
+                    <div class="mono">${entry.status}</div>
+                    <div class="mono">${entry.duration_ms}ms</div>
+                </div>
+            `).join("");
         }
 
         async function refreshAll() {
@@ -910,29 +464,33 @@
                 await Promise.all([loadConfig(), loadUsage(), loadLogs()]);
             } catch (error) {
                 console.error(error);
+                badge("proxyBadge", "err", "error");
             }
+        }
+
+        async function postAction(url) {
+            const result = await fetchJson(url, { method: "POST" });
+            await refreshAll();
+            return result;
+        }
+
+        async function applyConfig() { await postAction("/api/codex/apply-config"); }
+        async function restoreConfig() { await postAction("/api/codex/restore-config"); }
+        async function restartCodex() { await postAction("/api/codex/restart-desktop"); }
+
+        async function smokeTest() {
+            const result = await postAction("/api/codex/smoke-test");
+            alert(result.ok ? "Smoke test passed" : `Smoke test failed: ${result.error || result.status}`);
         }
 
         async function clearLogs() {
             await fetchJson("/api/logs", { method: "DELETE" });
-            expandedLogs.clear();
             await loadLogs();
         }
 
-        async function copyKiloSpec() {
-            await navigator.clipboard.writeText(JSON.stringify(lastKiloSpec, null, 2));
+        async function copyConfig() {
+            await navigator.clipboard.writeText(JSON.stringify(lastConfig.codexConfig || {}, null, 2));
         }
-
-        async function copyKiloBaseUrl() {
-            await navigator.clipboard.writeText(lastConfig.openaiBaseUrl || "");
-        }
-
-        document.getElementById("logs").addEventListener("click", (event) => {
-            if (!(event.target instanceof Element)) return;
-            const summary = event.target.closest(".log-summary");
-            if (!summary) return;
-            toggleLogDetail(summary.dataset.logKey);
-        });
 
         refreshAll();
         setInterval(refreshAll, 5000);

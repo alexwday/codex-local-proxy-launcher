@@ -1,4 +1,4 @@
-"""Request/response logging and usage tracking for kilo-launcher."""
+"""Request/response logging and usage tracking for codex-local-proxy-launcher."""
 
 import time
 import logging
