@@ -19,7 +19,8 @@ if [ ! -f "src/.env" ]; then
     echo "No .env file found. Copying from .env.example..."
     if [ -f "src/.env.example" ]; then
         cp src/.env.example src/.env
-        echo "Created src/.env with default settings. Edit it for your upstream endpoint/auth as needed."
+        echo "Created src/.env. Copy your existing launcher env values into it, append the Codex override block from README.md, then run again."
+        exit 1
     fi
 fi
 

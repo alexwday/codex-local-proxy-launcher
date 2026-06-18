@@ -2,13 +2,17 @@
 
 Local proxy, Codex Desktop config manager, and dashboard for routing Codex Desktop through a local OpenAI-compatible endpoint.
 
-Run it with:
+Work-machine setup is:
+
+1. Copy the existing launcher env that already works to `src/.env`.
+2. Append the Codex-only block in [Work Machine Env](#work-machine-env).
+3. Run:
 
 ```bash
 ./run.sh
 ```
 
-On startup the launcher creates a virtualenv, installs dependencies, creates `src/.env` from `src/.env.example` if needed, starts the Flask proxy, health-checks it, writes a reversible user-level Codex config override, launches or restarts `/Applications/Codex.app`, and opens the dashboard when `AUTO_OPEN_BROWSER=true`.
+On startup the launcher creates a virtualenv, installs dependencies, starts the Flask proxy, health-checks it, writes a reversible user-level Codex config override, launches or restarts `/Applications/Codex.app`, and opens the dashboard when `AUTO_OPEN_BROWSER=true`.
 
 ## What It Does
 
@@ -45,50 +49,77 @@ args = ["/Users/alexwday/.codex/codex-launcher/proxy_token"]
 refresh_interval_ms = 0
 ```
 
-## Upstream Modes
+## Upstream Mode
 
-Default mode translates Codex Responses requests to upstream Chat Completions:
+Default mode translates Codex Desktop's Responses requests to the same direct Chat Completions upstream used by the existing launcher:
 
 ```env
 CODEX_UPSTREAM_WIRE_API=chat_completions
-CODEX_TARGET_ENDPOINT=http://127.0.0.1:5050/v1
-CODEX_TARGET_API_KEY=<upstream-token>
+TARGET_ENDPOINT=<existing direct upstream /v1 endpoint>
+OAUTH_TOKEN_ENDPOINT=<existing OAuth token endpoint>
+OAUTH_CLIENT_ID=<existing OAuth client id>
+OAUTH_CLIENT_SECRET=<existing OAuth client secret>
+OAUTH_SCOPE=<existing OAuth scope>
+SKIP_SSL_VERIFY=false
 ```
 
-Native mode passes Responses requests through to an upstream that supports `/v1/responses`:
+`run.sh` installs `rbc_security` best-effort and `src/config.py` enables it when available, so the direct upstream path uses the same enterprise certificate behavior as the existing launcher. If OAuth is configured, OAuth is used before any static `TARGET_API_KEY`.
+
+Native mode is only for an upstream that already supports `/v1/responses`:
 
 ```env
 CODEX_UPSTREAM_WIRE_API=responses
-CODEX_TARGET_ENDPOINT=https://api.openai.com/v1
-CODEX_TARGET_API_KEY=<upstream-token>
+TARGET_ENDPOINT=<native Responses upstream /v1 endpoint>
 ```
 
 The Chat Completions adapter supports text, instructions, function tools, function-call outputs, `max_output_tokens`, model mapping, usage extraction, non-streaming responses, streaming text deltas, and streaming function-call deltas. Hosted built-in Responses tools such as web/file search are rejected with an OpenAI-shaped error unless native Responses mode is enabled.
 
-## Migrating An Existing Env
+## Work Machine Env
 
-You can reuse most values from an existing launcher `.env`, but keep the Codex launcher on its own local port so it does not collide with another proxy:
+Start with the existing launcher `.env` that already works on the work machine. Copy that file to this repo as `src/.env`; do not rewrite the upstream auth section. Keep the existing direct endpoint, OAuth, SSL, timeout, token-limit, model mapping, pricing, and rbc_security-related behavior.
+
+Then append this Codex-only block at the bottom:
 
 ```env
+# =============================================================================
+# CODEX LOCAL PROXY LAUNCHER OVERRIDES
+# =============================================================================
+
+# Keep Codex on its own local port so it does not collide with the other launcher.
 CODEX_PROXY_PORT=5051
+
+# Codex Desktop custom providers currently use the Responses API. This launcher
+# exposes /v1/responses to Codex and translates to Chat Completions upstream.
 CODEX_UPSTREAM_WIRE_API=chat_completions
+
+# Codex-facing provider and model settings.
+CODEX_PROVIDER_ID=codex-local-proxy
+CODEX_PROVIDER_NAME=Codex Local Proxy
+CODEX_MODEL_OPTIONS=gpt-5.5,gpt-5.4,gpt-5.4-mini,gpt-5.4-nano
+CODEX_DEFAULT_MODEL=gpt-5.5
+
+# Codex Desktop app/config behavior.
+CODEX_APP_PATH=/Applications/Codex.app
+AUTO_APPLY_CODEX_CONFIG=true
+AUTO_RESTART_CODEX_DESKTOP=true
+AUTO_OPEN_BROWSER=true
+
+# Leave blank unless you intentionally want fixed local tokens. When blank, the
+# launcher creates ~/.codex/codex-launcher/proxy_token for Codex Desktop auth.
+CODEX_PROXY_ACCESS_TOKEN=
+CODEX_DASHBOARD_ACCESS_TOKEN=
 ```
 
-If this launcher should call your existing local proxy, point it at that proxy and use that proxy's local API key:
+Do not add `CODEX_TARGET_ENDPOINT` or `CODEX_TARGET_API_KEY` for the normal work-machine setup. Leaving those unset makes the Codex launcher inherit the existing direct `TARGET_ENDPOINT`, `TARGET_API_KEY` if present, `OAUTH_*`, `SKIP_SSL_VERIFY`, timeout, SSL, and rbc_security behavior from the copied env.
+
+Make sure `MODEL_MAPPING` contains entries for every model in `CODEX_MODEL_OPTIONS`. If the existing mapping does not include `gpt-5.5`, either add its internal mapping or set `CODEX_DEFAULT_MODEL` to a model that is already mapped.
+
+Only use this alternative if you intentionally want to chain through another local proxy:
 
 ```env
 CODEX_TARGET_ENDPOINT=http://127.0.0.1:5050/v1
-CODEX_TARGET_API_KEY=<existing-local-proxy-token>
+CODEX_TARGET_API_KEY=<other-local-proxy-token>
 ```
-
-If this launcher should call the internal endpoint directly, copy the existing upstream values instead:
-
-```env
-CODEX_TARGET_ENDPOINT=<existing TARGET_ENDPOINT>
-CODEX_TARGET_API_KEY=<existing TARGET_API_KEY>
-```
-
-You can copy `MODEL_MAPPING`, `MODEL_PRICING_USD_PER_1K`, `OAUTH_*`, timeout, SSL, and token-limit settings directly. Prefer `CODEX_MODEL_OPTIONS` and `CODEX_DEFAULT_MODEL` for the Codex-facing model list/default. Leave `CODEX_PROXY_ACCESS_TOKEN` blank unless you intentionally want to reuse a fixed local token; otherwise the launcher creates `~/.codex/codex-launcher/proxy_token` for Codex Desktop.
 
 ## Key Env Vars
 
