@@ -92,11 +92,9 @@ CODEX_PROXY_PORT=5051
 # exposes /v1/responses to Codex and translates to Chat Completions upstream.
 CODEX_UPSTREAM_WIRE_API=chat_completions
 
-# Codex-facing provider and model settings.
+# Codex-facing provider settings.
 CODEX_PROVIDER_ID=codex-local-proxy
 CODEX_PROVIDER_NAME=Codex Local Proxy
-CODEX_MODEL_OPTIONS=gpt-5.5,gpt-5.4,gpt-5.4-mini,gpt-5.4-nano
-CODEX_DEFAULT_MODEL=gpt-5.5
 
 # Codex Desktop app/config behavior.
 CODEX_APP_PATH=/Applications/Codex.app
@@ -112,7 +110,9 @@ CODEX_DASHBOARD_ACCESS_TOKEN=
 
 Do not add `CODEX_TARGET_ENDPOINT` or `CODEX_TARGET_API_KEY` for the normal work-machine setup. Leaving those unset makes the Codex launcher inherit the existing direct `TARGET_ENDPOINT`, `TARGET_API_KEY` if present, `OAUTH_*`, `SKIP_SSL_VERIFY`, timeout, SSL, and rbc_security behavior from the copied env.
 
-Make sure `MODEL_MAPPING` contains entries for every model in `CODEX_MODEL_OPTIONS`. If the existing mapping does not include `gpt-5.5`, either add its internal mapping or set `CODEX_DEFAULT_MODEL` to a model that is already mapped.
+The Codex launcher also inherits the existing `MODEL_OPTIONS`, `OPENAI_MODEL_OPTIONS`, `DEFAULT_MODEL`, `MODEL_MAPPING`, and pricing values. Only set `CODEX_MODEL_OPTIONS` or `CODEX_DEFAULT_MODEL` if you intentionally want Codex Desktop to see a different model list/default than the existing launcher.
+
+Make sure `MODEL_MAPPING` contains entries for every model Codex will expose. If the existing mapping does not include your chosen default model, either add its internal mapping or set `DEFAULT_MODEL` to a model that is already mapped.
 
 Only use this alternative if you intentionally want to chain through another local proxy:
 
@@ -126,7 +126,9 @@ CODEX_TARGET_API_KEY=<other-local-proxy-token>
 - `CODEX_PROXY_PORT`, `BIND_HOST`
 - `CODEX_PROXY_ACCESS_TOKEN`, `CODEX_DASHBOARD_ACCESS_TOKEN`
 - `CODEX_TARGET_ENDPOINT`, `CODEX_TARGET_API_KEY`, `CODEX_UPSTREAM_WIRE_API`
-- `CODEX_MODEL_OPTIONS`, `CODEX_DEFAULT_MODEL`, `MODEL_MAPPING`, `MODEL_PRICING_USD_PER_1K`
+- `MODEL_OPTIONS`, `OPENAI_MODEL_OPTIONS`, `DEFAULT_MODEL`
+- Optional overrides: `CODEX_MODEL_OPTIONS`, `CODEX_DEFAULT_MODEL`
+- `MODEL_MAPPING`, `MODEL_PRICING_USD_PER_1K`
 - `CODEX_HOME`, `CODEX_CONFIG_PATH`, `CODEX_PROXY_TOKEN_FILE`
 - `CODEX_PROVIDER_ID`, `CODEX_PROVIDER_NAME`, `CODEX_APP_PATH`
 - `AUTO_APPLY_CODEX_CONFIG`, `AUTO_RESTART_CODEX_DESKTOP`, `AUTO_OPEN_BROWSER`

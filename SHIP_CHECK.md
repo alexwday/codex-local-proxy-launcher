@@ -11,7 +11,7 @@ Checked June 17, 2026.
 
 Implementation coverage:
 
-- `GET /v1/models` returns OpenAI-shaped model objects from `CODEX_MODEL_OPTIONS`.
+- `GET /v1/models` returns OpenAI-shaped model objects from `MODEL_OPTIONS` / `OPENAI_MODEL_OPTIONS`, with `CODEX_MODEL_OPTIONS` available only as an optional override.
 - `POST /v1/responses` is the primary Codex-facing generation endpoint.
 - The managed config writes `model`, `model_provider`, `[model_providers.<id>]`, and `[model_providers.<id>.auth]`.
 - The proxy token is stored at `~/.codex/codex-launcher/proxy_token` with `0600` permissions.
@@ -38,16 +38,16 @@ Implementation coverage:
 
 Configure these values in `src/.env`:
 
-- `CODEX_TARGET_ENDPOINT`
-- `CODEX_TARGET_API_KEY` or the `OAUTH_*` values
+- `TARGET_ENDPOINT`
+- `TARGET_API_KEY` or the `OAUTH_*` values
 - `CODEX_UPSTREAM_WIRE_API`
-- `CODEX_MODEL_OPTIONS`
+- `MODEL_OPTIONS` or `OPENAI_MODEL_OPTIONS`
 - `MODEL_MAPPING`
 - `MODEL_PRICING_USD_PER_1K`
-- `CODEX_DEFAULT_MODEL`
+- `DEFAULT_MODEL`
 - `DEFAULT_MAX_COMPLETION_TOKENS`
 
-To chain through an existing local proxy, set `CODEX_TARGET_ENDPOINT` to that proxy's `/v1` base URL, keep `CODEX_UPSTREAM_WIRE_API=chat_completions`, and set `CODEX_TARGET_API_KEY` to the upstream proxy token.
+To chain through another local proxy instead of calling the direct upstream, set `CODEX_TARGET_ENDPOINT` to that proxy's `/v1` base URL, keep `CODEX_UPSTREAM_WIRE_API=chat_completions`, and set `CODEX_TARGET_API_KEY` to the upstream proxy token.
 
 ## Validation
 
