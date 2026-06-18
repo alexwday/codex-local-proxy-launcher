@@ -486,6 +486,151 @@ class ProxyTestCase(unittest.TestCase):
         self.assertIn("event: response.completed", body)
         self.assertIn('"text":"hello"', body)
 
+    def test_responses_streaming_preserves_custom_tool_call_shape(self):
+        stream = _FakeStream(
+            [
+                _FakeCompletion(
+                    {
+                        "id": "chunk-tool-1",
+                        "object": "chat.completion.chunk",
+                        "created": 123,
+                        "model": "internal-gpt",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    "role": "assistant",
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call_custom",
+                                            "type": "function",
+                                            "function": {"name": "code_exec", "arguments": "{\"input\":\""},
+                                        }
+                                    ],
+                                },
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                ),
+                _FakeCompletion(
+                    {
+                        "id": "chunk-tool-2",
+                        "object": "chat.completion.chunk",
+                        "created": 124,
+                        "model": "internal-gpt",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "function": {"arguments": "ls\"}"},
+                                        }
+                                    ]
+                                },
+                                "finish_reason": "tool_calls",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+                    }
+                ),
+            ]
+        )
+        fake_client = _FakeOpenAIClient(stream)
+
+        with mock.patch.object(proxy_handler, "OpenAI", return_value=fake_client):
+            response = self.client.post(
+                "/v1/responses",
+                headers=self._headers(),
+                json={
+                    "model": "codex-gpt",
+                    "input": "inspect",
+                    "stream": True,
+                    "tools": [{"type": "custom", "name": "code_exec"}],
+                },
+                buffered=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('"type":"custom_tool_call"', body)
+        self.assertIn("event: response.custom_tool_call_input.done", body)
+        self.assertIn('"input":"ls"', body)
+        self.assertNotIn("event: response.function_call_arguments.delta", body)
+
+    def test_responses_streaming_preserves_namespace_function_call_shape(self):
+        stream = _FakeStream(
+            [
+                _FakeCompletion(
+                    {
+                        "id": "chunk-ns-1",
+                        "object": "chat.completion.chunk",
+                        "created": 123,
+                        "model": "internal-gpt",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    "role": "assistant",
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call_read",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "read_file",
+                                                "arguments": "{\"path\":\"README.md\"}",
+                                            },
+                                        }
+                                    ],
+                                },
+                                "finish_reason": "tool_calls",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+                    }
+                )
+            ]
+        )
+        fake_client = _FakeOpenAIClient(stream)
+
+        with mock.patch.object(proxy_handler, "OpenAI", return_value=fake_client):
+            response = self.client.post(
+                "/v1/responses",
+                headers=self._headers(),
+                json={
+                    "model": "codex-gpt",
+                    "input": "inspect",
+                    "stream": True,
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "workspace",
+                            "tools": [
+                                {
+                                    "type": "function",
+                                    "name": "read_file",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {"path": {"type": "string"}},
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                },
+                buffered=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('"type":"function_call"', body)
+        self.assertIn('"namespace":"workspace"', body)
+        self.assertIn("event: response.function_call_arguments.done", body)
+
     def test_responses_function_call_and_previous_response_tool_output(self):
         first_client = _FakeOpenAIClient(
             _FakeCompletion(

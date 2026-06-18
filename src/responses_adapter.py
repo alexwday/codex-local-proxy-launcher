@@ -706,33 +706,173 @@ class ResponseStreamAdapter:
         ]
 
     def _ensure_tool_started(self, index: int, delta: dict[str, Any]) -> list[str]:
-        if index in self.tool_calls:
+        if index in self.tool_calls and self.tool_calls[index].get("started"):
             return []
-        item_id = make_function_call_id()
-        call_id = delta.get("id") or f"call_{uuid.uuid4().hex}"
-        function = delta.get("function") or {}
-        state = {
-            "id": item_id,
-            "output_index": self.next_output_index + len(self.tool_calls) + (1 if self.text_started else 0),
-            "call_id": call_id,
-            "name": function.get("name") or "",
-            "arguments": "",
-        }
-        self.tool_calls[index] = state
-        item = {
-            "id": item_id,
-            "type": "function_call",
-            "call_id": call_id,
-            "name": state["name"],
-            "arguments": "",
-            "status": "in_progress",
-        }
+        state = self.tool_calls.get(index)
+        if state is None:
+            call_id = delta.get("id") or f"call_{uuid.uuid4().hex}"
+            output_index = self.next_output_index + len(self.tool_calls) + (1 if self.text_started else 0)
+            state = {
+                "id": None,
+                "output_index": output_index,
+                "call_id": call_id,
+                "name": "",
+                "arguments": "",
+                "started": False,
+                "response_tool_type": None,
+            }
+            self.tool_calls[index] = state
+        if state.get("started"):
+            return []
+        if not state.get("name"):
+            return []
+
+        metadata = self.tool_metadata.get(state["name"], {})
+        is_custom = metadata.get("type") == "custom"
+        state["response_tool_type"] = "custom_tool_call" if is_custom else "function_call"
+        state["id"] = make_custom_tool_call_id() if is_custom else make_function_call_id()
+        state["started"] = True
+
+        if is_custom:
+            item = {
+                "id": state["id"],
+                "type": "custom_tool_call",
+                "call_id": state["call_id"],
+                "name": metadata.get("name") or state["name"],
+                "input": "",
+                "status": "in_progress",
+            }
+        else:
+            item = {
+                "id": state["id"],
+                "type": "function_call",
+                "call_id": state["call_id"],
+                "name": metadata.get("name") or state["name"],
+                "arguments": "",
+                "status": "in_progress",
+            }
+            if metadata.get("namespace"):
+                item["namespace"] = metadata["namespace"]
+
         return [
             sse_event(
                 "response.output_item.added",
                 {"type": "response.output_item.added", "output_index": state["output_index"], "item": item},
             )
         ]
+
+    def _ensure_tool_state(self, index: int, delta: dict[str, Any]) -> dict[str, Any]:
+        if index not in self.tool_calls:
+            call_id = delta.get("id") or f"call_{uuid.uuid4().hex}"
+            self.tool_calls[index] = {
+                "id": None,
+                "output_index": self.next_output_index + len(self.tool_calls) + (1 if self.text_started else 0),
+                "call_id": call_id,
+                "name": "",
+                "arguments": "",
+                "started": False,
+                "response_tool_type": None,
+            }
+        elif delta.get("id") and not self.tool_calls[index].get("call_id"):
+            self.tool_calls[index]["call_id"] = delta["id"]
+        return self.tool_calls[index]
+
+    def _tool_delta_event(self, state: dict[str, Any], arg_delta: str) -> str | None:
+        if not state.get("started"):
+            return None
+        if state.get("response_tool_type") == "custom_tool_call":
+            return None
+        return sse_event(
+            "response.function_call_arguments.delta",
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": state["id"],
+                "output_index": state["output_index"],
+                "delta": arg_delta,
+            },
+        )
+
+    def _final_tool_events(self, state: dict[str, Any], item: dict[str, Any]) -> list[str]:
+        if state.get("response_tool_type") == "custom_tool_call":
+            input_text = item.get("input", "")
+            return [
+                sse_event(
+                    "response.custom_tool_call_input.delta",
+                    {
+                        "type": "response.custom_tool_call_input.delta",
+                        "item_id": state["id"],
+                        "output_index": state["output_index"],
+                        "delta": input_text,
+                    },
+                ),
+                sse_event(
+                    "response.custom_tool_call_input.done",
+                    {
+                        "type": "response.custom_tool_call_input.done",
+                        "item_id": state["id"],
+                        "output_index": state["output_index"],
+                        "input": input_text,
+                    },
+                ),
+                sse_event(
+                    "response.output_item.done",
+                    {"type": "response.output_item.done", "output_index": state["output_index"], "item": item},
+                ),
+            ]
+
+        return [
+            sse_event(
+                "response.function_call_arguments.done",
+                {
+                    "type": "response.function_call_arguments.done",
+                    "item_id": state["id"],
+                    "output_index": state["output_index"],
+                    "arguments": item["arguments"],
+                },
+            ),
+            sse_event(
+                "response.output_item.done",
+                {"type": "response.output_item.done", "output_index": state["output_index"], "item": item},
+            ),
+        ]
+
+    def _tool_output_item(self, state: dict[str, Any]) -> dict[str, Any]:
+        metadata = self.tool_metadata.get(state["name"], {})
+        if state.get("response_tool_type") == "custom_tool_call":
+            if not state.get("id"):
+                state["id"] = make_custom_tool_call_id()
+            return {
+                "id": state["id"],
+                "type": "custom_tool_call",
+                "call_id": state["call_id"],
+                "name": metadata.get("name") or state["name"] or "unknown_function",
+                "input": _custom_tool_input_from_chat_arguments(state["arguments"]),
+                "status": "completed",
+            }
+
+        if not state.get("id"):
+            state["id"] = make_function_call_id()
+        item = {
+            "id": state["id"],
+            "type": "function_call",
+            "call_id": state["call_id"],
+            "name": metadata.get("name") or state["name"] or "unknown_function",
+            "arguments": state["arguments"] or "{}",
+            "status": "completed",
+        }
+        if metadata.get("namespace"):
+            item["namespace"] = metadata["namespace"]
+        return item
+
+    def _tool_call_for_chat_history(self, state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": state["call_id"],
+            "type": "function",
+            "function": {
+                "name": state["name"] or "unknown_function",
+                "arguments": state["arguments"] or "{}",
+            },
+        }
 
     def chunk_events(self, chunk_payload: dict[str, Any]) -> list[str]:
         events: list[str] = []
@@ -760,25 +900,17 @@ class ResponseStreamAdapter:
 
             for tool_delta in delta.get("tool_calls") or []:
                 index = int(tool_delta.get("index", 0))
-                events.extend(self._ensure_tool_started(index, tool_delta))
-                state = self.tool_calls[index]
+                state = self._ensure_tool_state(index, tool_delta)
                 function = tool_delta.get("function") or {}
                 if function.get("name"):
                     state["name"] += function["name"]
+                events.extend(self._ensure_tool_started(index, tool_delta))
                 if function.get("arguments"):
                     arg_delta = str(function["arguments"])
                     state["arguments"] += arg_delta
-                    events.append(
-                        sse_event(
-                            "response.function_call_arguments.delta",
-                            {
-                                "type": "response.function_call_arguments.delta",
-                                "item_id": state["id"],
-                                "output_index": state["output_index"],
-                                "delta": arg_delta,
-                            },
-                        )
-                    )
+                    event = self._tool_delta_event(state, arg_delta)
+                    if event:
+                        events.append(event)
         return events
 
     def final_events(self) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
@@ -829,45 +961,11 @@ class ResponseStreamAdapter:
         tool_calls: list[dict[str, Any]] = []
         for index in sorted(self.tool_calls):
             state = self.tool_calls[index]
-            metadata = self.tool_metadata.get(state["name"], {})
-            item = {
-                "id": state["id"],
-                "type": "function_call",
-                "call_id": state["call_id"],
-                "name": metadata.get("name") or state["name"] or "unknown_function",
-                "arguments": state["arguments"] or "{}",
-                "status": "completed",
-            }
-            if metadata.get("namespace"):
-                item["namespace"] = metadata["namespace"]
+            events.extend(self._ensure_tool_started(index, {}))
+            item = self._tool_output_item(state)
             output.append(item)
-            tool_calls.append(
-                {
-                    "id": state["call_id"],
-                    "type": "function",
-                    "function": {
-                        "name": state["name"] or item["name"],
-                        "arguments": item["arguments"],
-                    },
-                }
-            )
-            events.extend(
-                [
-                    sse_event(
-                        "response.function_call_arguments.done",
-                        {
-                            "type": "response.function_call_arguments.done",
-                            "item_id": state["id"],
-                            "output_index": state["output_index"],
-                            "arguments": item["arguments"],
-                        },
-                    ),
-                    sse_event(
-                        "response.output_item.done",
-                        {"type": "response.output_item.done", "output_index": state["output_index"], "item": item},
-                    ),
-                ]
-            )
+            tool_calls.append(self._tool_call_for_chat_history(state))
+            events.extend(self._final_tool_events(state, item))
 
         if tool_calls:
             assistant_message["tool_calls"] = tool_calls
