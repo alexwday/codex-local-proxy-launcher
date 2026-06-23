@@ -506,6 +506,10 @@ class ProxyTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(fake_client.calls[0]["reasoning_effort"], "medium")
+        call = self.app.config["LOG_MANAGER"].get_api_calls(1)[0]
+        self.assertEqual(call["codex_reasoning_effort"], "medium")
+        self.assertEqual(call["upstream_reasoning_effort"], "medium")
+        self.assertFalse(call["reasoning_effort_removed"])
 
     def test_responses_chat_adapter_drops_reasoning_effort_with_tools(self):
         fake_client = _FakeOpenAIClient(
@@ -551,6 +555,10 @@ class ProxyTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("tools", fake_client.calls[0])
         self.assertNotIn("reasoning_effort", fake_client.calls[0])
+        call = self.app.config["LOG_MANAGER"].get_api_calls(1)[0]
+        self.assertEqual(call["codex_reasoning_effort"], "medium")
+        self.assertEqual(call["upstream_reasoning_effort"], "")
+        self.assertTrue(call["reasoning_effort_removed"])
 
     def test_responses_streaming_translates_chat_chunks_to_responses_sse(self):
         stream = _FakeStream(
@@ -1277,6 +1285,24 @@ class ProxyTestCase(unittest.TestCase):
         calls = manager.get_api_calls()
         self.assertEqual(calls[0]["codex_model"], "codex-gpt")
         self.assertEqual(calls[0]["target_model"], "internal-gpt")
+
+    def test_logger_tracks_reasoning_effort_metadata(self):
+        manager = LoggerManager()
+        manager.log_api_call(
+            method="POST",
+            path="/v1/responses",
+            status=200,
+            duration_ms=1000,
+            request_data={"model": "codex-gpt", "reasoning": {"effort": "high"}},
+            codex_reasoning_effort="high",
+            upstream_reasoning_effort="",
+            reasoning_effort_removed=True,
+        )
+
+        call = manager.get_api_calls()[0]
+        self.assertEqual(call["codex_reasoning_effort"], "high")
+        self.assertEqual(call["upstream_reasoning_effort"], "")
+        self.assertTrue(call["reasoning_effort_removed"])
 
     def test_logger_extracts_dashboard_error_message(self):
         manager = LoggerManager()

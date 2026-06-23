@@ -285,6 +285,42 @@ def _extract_usage_tokens(payload: dict[str, Any]) -> tuple[int, int]:
     return int(input_tokens or 0), int(output_tokens or 0)
 
 
+def _extract_reasoning_effort(payload: dict[str, Any] | None) -> str:
+    """Extract reasoning effort from Responses or Chat Completions request payloads."""
+    if not isinstance(payload, dict):
+        return ""
+    reasoning = payload.get("reasoning")
+    if isinstance(reasoning, dict) and reasoning.get("effort") is not None:
+        return str(reasoning["effort"])
+    effort = payload.get("reasoning_effort")
+    return str(effort) if effort is not None else ""
+
+
+def _chat_upstream_reasoning_metadata(
+    codex_payload: dict[str, Any] | None,
+    upstream_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Return reasoning metadata for dashboard logs when forwarding to Chat Completions."""
+    codex_effort = _extract_reasoning_effort(codex_payload)
+    upstream_effort = _extract_reasoning_effort(upstream_payload)
+    removed = bool(codex_effort and not upstream_effort and isinstance(upstream_payload, dict) and upstream_payload.get("tools"))
+    return {
+        "codex_reasoning_effort": codex_effort,
+        "upstream_reasoning_effort": upstream_effort,
+        "reasoning_effort_removed": removed,
+    }
+
+
+def _native_responses_reasoning_metadata(response_request: dict[str, Any] | None) -> dict[str, Any]:
+    """Return reasoning metadata for native Responses upstream forwarding."""
+    effort = _extract_reasoning_effort(response_request)
+    return {
+        "codex_reasoning_effort": effort,
+        "upstream_reasoning_effort": effort,
+        "reasoning_effort_removed": False,
+    }
+
+
 def _make_model_object(model_id: str) -> dict[str, Any]:
     """Build an OpenAI-compatible model list item."""
     return {
@@ -534,6 +570,7 @@ def chat_completions():
             len(openai_request.get("messages", [])),
             is_streaming,
         )
+        reasoning_metadata = _chat_upstream_reasoning_metadata(openai_request, sdk_payload)
 
         if config.use_placeholder_mode:
             if is_streaming:
@@ -561,6 +598,7 @@ def chat_completions():
                 cost_usd=config.calculate_cost(public_model, input_tokens, output_tokens),
                 public_model=public_model,
                 target_model=target_model,
+                **reasoning_metadata,
             )
             return jsonify(response_payload), 200
 
@@ -579,6 +617,7 @@ def chat_completions():
                 error,
                 public_model=public_model,
                 target_model=target_model,
+                **reasoning_metadata,
             )
             return jsonify(error), 500
 
@@ -621,6 +660,7 @@ def _handle_responses_non_streaming_chat_upstream(
 ):
     """Handle a non-streaming Responses request via Chat Completions upstream."""
     client = None
+    reasoning_metadata = _chat_upstream_reasoning_metadata(response_request, sdk_payload)
     try:
         client = _build_openai_client(
             config,
@@ -644,6 +684,7 @@ def _handle_responses_non_streaming_chat_upstream(
             path="/v1/responses",
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
     except (APITimeoutError, APIConnectionError) as e:
         error = openai_error(f"Upstream connection error: {e}", "api_connection_error")
@@ -657,6 +698,7 @@ def _handle_responses_non_streaming_chat_upstream(
             error,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
         return jsonify(error), 502
     except Exception as e:
@@ -672,6 +714,7 @@ def _handle_responses_non_streaming_chat_upstream(
             error,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
         return jsonify(error), 500
     finally:
@@ -693,6 +736,7 @@ def _handle_responses_non_streaming_chat_upstream(
         cost_usd=cost,
         public_model=public_model,
         target_model=target_model,
+        **reasoning_metadata,
     )
     logger.info("<- responses %s tokens=%s+%s", public_model, input_tokens, output_tokens)
     return jsonify(response_payload), 200
@@ -713,6 +757,7 @@ def _handle_responses_streaming_chat_upstream(
     client = None
     stream = None
     adapter = ResponseStreamAdapter(public_model, response_request)
+    reasoning_metadata = _chat_upstream_reasoning_metadata(response_request, sdk_payload)
 
     try:
         client = _build_openai_client(
@@ -731,6 +776,7 @@ def _handle_responses_streaming_chat_upstream(
             path="/v1/responses",
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
     except (APITimeoutError, APIConnectionError) as e:
         _release_inflight_request(request_fingerprint)
@@ -747,6 +793,7 @@ def _handle_responses_streaming_chat_upstream(
             error,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
         return jsonify(error), 502
     except Exception as e:
@@ -765,6 +812,7 @@ def _handle_responses_streaming_chat_upstream(
             error,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
         return jsonify(error), 500
 
@@ -818,6 +866,7 @@ def _handle_responses_streaming_chat_upstream(
                 cost_usd=cost,
                 public_model=public_model,
                 target_model=target_model,
+                **reasoning_metadata,
             )
             _release_inflight_request(request_fingerprint)
 
@@ -851,6 +900,7 @@ def _handle_native_responses(response_request, start_time, config, log_manager):
     """Forward a non-streaming Responses request to a native Responses upstream."""
     public_model = response_request.get("model") or config.default_model
     target_model = ""
+    reasoning_metadata = _native_responses_reasoning_metadata(response_request)
     try:
         payload, public_model, target_model = _native_responses_payload(config, response_request)
         with httpx.Client(verify=config.get_verify_ssl(), timeout=config.request_timeout_seconds) as client:
@@ -873,6 +923,7 @@ def _handle_native_responses(response_request, start_time, config, log_manager):
             error,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
         return jsonify(error), 502
 
@@ -887,6 +938,7 @@ def _handle_native_responses(response_request, start_time, config, log_manager):
             upstream_payload,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
         return jsonify(upstream_payload), upstream.status_code
 
@@ -906,6 +958,7 @@ def _handle_native_responses(response_request, start_time, config, log_manager):
         cost_usd=config.calculate_cost(public_model, input_tokens, output_tokens),
         public_model=public_model,
         target_model=target_model,
+        **reasoning_metadata,
     )
     return jsonify(upstream_payload), 200
 
@@ -914,6 +967,7 @@ def _handle_native_responses_stream(response_request, start_time, config, log_ma
     """Forward a streaming Responses request to a native Responses upstream."""
     public_model = response_request.get("model") or config.default_model
     target_model = ""
+    reasoning_metadata = _native_responses_reasoning_metadata(response_request)
     try:
         payload, public_model, target_model = _native_responses_payload(config, response_request)
         client = httpx.Client(verify=config.get_verify_ssl(), timeout=config.streaming_timeout_seconds)
@@ -938,6 +992,7 @@ def _handle_native_responses_stream(response_request, start_time, config, log_ma
             error,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
         return jsonify(error), 502
 
@@ -959,6 +1014,7 @@ def _handle_native_responses_stream(response_request, start_time, config, log_ma
             error_payload,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
         return jsonify(error_payload), response.status_code
 
@@ -991,6 +1047,7 @@ def _handle_native_responses_stream(response_request, start_time, config, log_ma
                 response_for_log,
                 public_model=public_model,
                 target_model=target_model,
+                **reasoning_metadata,
             )
             _release_inflight_request(request_fingerprint)
 
@@ -1008,6 +1065,7 @@ def _handle_native_responses_stream(response_request, start_time, config, log_ma
 def _handle_non_streaming(sdk_payload, public_model, target_model, openai_request, start_time, config, log_manager):
     """Handle a non-streaming Chat Completions request."""
     client = None
+    reasoning_metadata = _chat_upstream_reasoning_metadata(openai_request, sdk_payload)
     try:
         client = _build_openai_client(
             config,
@@ -1024,6 +1082,7 @@ def _handle_non_streaming(sdk_payload, public_model, target_model, openai_reques
             log_manager,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
     except (APITimeoutError, APIConnectionError) as e:
         error = openai_error(f"Upstream connection error: {e}", "api_connection_error")
@@ -1037,6 +1096,7 @@ def _handle_non_streaming(sdk_payload, public_model, target_model, openai_reques
             error,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
         return jsonify(error), 502
     except Exception as e:
@@ -1052,6 +1112,7 @@ def _handle_non_streaming(sdk_payload, public_model, target_model, openai_reques
             error,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
         return jsonify(error), 500
     finally:
@@ -1073,6 +1134,7 @@ def _handle_non_streaming(sdk_payload, public_model, target_model, openai_reques
         cost_usd=cost,
         public_model=public_model,
         target_model=target_model,
+        **reasoning_metadata,
     )
 
     logger.info("<- %s tokens=%s+%s", public_model, input_tokens, output_tokens)
@@ -1092,6 +1154,7 @@ def _handle_streaming(
     """Handle a streaming Chat Completions request."""
     client = None
     stream = None
+    reasoning_metadata = _chat_upstream_reasoning_metadata(openai_request, sdk_payload)
 
     try:
         client = _build_openai_client(
@@ -1109,6 +1172,7 @@ def _handle_streaming(
             log_manager,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
     except (APITimeoutError, APIConnectionError) as e:
         _release_inflight_request(request_fingerprint)
@@ -1125,6 +1189,7 @@ def _handle_streaming(
             error,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
         return jsonify(error), 502
     except Exception as e:
@@ -1143,6 +1208,7 @@ def _handle_streaming(
             error,
             public_model=public_model,
             target_model=target_model,
+            **reasoning_metadata,
         )
         return jsonify(error), 500
 
@@ -1192,6 +1258,7 @@ def _handle_streaming(
                 cost_usd=cost,
                 public_model=public_model,
                 target_model=target_model,
+                **reasoning_metadata,
             )
             _release_inflight_request(request_fingerprint)
 
@@ -1221,6 +1288,9 @@ def _handle_openai_status_error(
     path="/v1/chat/completions",
     public_model=None,
     target_model=None,
+    codex_reasoning_effort=None,
+    upstream_reasoning_effort=None,
+    reasoning_effort_removed=False,
 ):
     """Forward an OpenAI SDK status error as an OpenAI-compatible payload."""
     status_code = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", 502)
@@ -1244,6 +1314,9 @@ def _handle_openai_status_error(
         error_payload,
         public_model=public_model,
         target_model=target_model,
+        codex_reasoning_effort=codex_reasoning_effort,
+        upstream_reasoning_effort=upstream_reasoning_effort,
+        reasoning_effort_removed=reasoning_effort_removed,
     )
     return jsonify(error_payload), status_code
 

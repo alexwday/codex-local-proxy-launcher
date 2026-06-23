@@ -82,9 +82,14 @@ class LoggerManager:
         cost_usd: float = 0.0,
         public_model: Optional[str] = None,
         target_model: Optional[str] = None,
+        codex_reasoning_effort: Optional[str] = None,
+        upstream_reasoning_effort: Optional[str] = None,
+        reasoning_effort_removed: bool = False,
     ):
         """Log an API call with optional request/response data."""
         codex_model = public_model or self._extract_model(request_data) or self._extract_model(response_data)
+        codex_effort = codex_reasoning_effort or self._extract_reasoning_effort(request_data)
+        upstream_effort = upstream_reasoning_effort or ""
         entry = {
             'timestamp': time.time(),
             'method': method,
@@ -93,6 +98,9 @@ class LoggerManager:
             'duration_ms': duration_ms,
             'codex_model': codex_model or '',
             'target_model': target_model or '',
+            'codex_reasoning_effort': codex_effort,
+            'upstream_reasoning_effort': upstream_effort,
+            'reasoning_effort_removed': bool(reasoning_effort_removed),
             'request': self._sanitize_for_log(request_data),
             'response': self._sanitize_for_log(response_data),
             'error_message': self._extract_error_message(response_data) if status >= 400 else '',
@@ -144,7 +152,11 @@ class LoggerManager:
             cost_str = f"${cost_usd:.4f}" if cost_usd > 0 else ""
             token_info = f" | tokens: {input_tokens}+{output_tokens}" + (f" ({cost_str})" if cost_str else "")
         model_info = f" | model: {codex_model}->{target_model}" if codex_model and target_model else ""
-        logger.info(f"{method} {path} -> {status} ({duration_ms}ms){model_info}{token_info}")
+        reasoning_info = ""
+        if codex_effort:
+            upstream_display = "removed" if reasoning_effort_removed else (upstream_effort or "-")
+            reasoning_info = f" | reasoning: {codex_effort}->{upstream_display}"
+        logger.info(f"{method} {path} -> {status} ({duration_ms}ms){model_info}{reasoning_info}{token_info}")
 
     def log_server_event(self, level: str, message: str, data: Optional[Dict] = None):
         """Log a server event."""
@@ -219,6 +231,16 @@ class LoggerManager:
             return ""
         model = data.get('model')
         return str(model) if model else ""
+
+    def _extract_reasoning_effort(self, data: Optional[Dict]) -> str:
+        """Extract reasoning effort from Responses or Chat Completions payloads."""
+        if not isinstance(data, dict):
+            return ""
+        reasoning = data.get('reasoning')
+        if isinstance(reasoning, dict) and reasoning.get('effort') is not None:
+            return str(reasoning['effort'])
+        effort = data.get('reasoning_effort')
+        return str(effort) if effort is not None else ""
 
     def _sanitize_for_log(self, data: Optional[Dict]) -> Optional[Dict]:
         """Sanitize data for logging (truncate large content)."""

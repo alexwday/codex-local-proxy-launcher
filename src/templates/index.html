@@ -230,7 +230,7 @@
 
         .log {
             display: grid;
-            grid-template-columns: 74px 54px minmax(110px, 0.8fr) minmax(160px, 1fr) 58px 82px 82px 72px;
+            grid-template-columns: 74px 54px minmax(100px, 0.7fr) minmax(140px, 1fr) minmax(120px, 0.8fr) 58px 82px 82px 72px;
             gap: 8px;
             align-items: center;
             padding: 8px 10px;
@@ -407,6 +407,13 @@
             return `${fmtNumber(entry.input_tokens)} / ${fmtNumber(entry.output_tokens)}`;
         }
 
+        function fmtReasoning(entry) {
+            const codexEffort = entry.codex_reasoning_effort || "-";
+            const upstreamEffort = entry.reasoning_effort_removed ? "removed" : (entry.upstream_reasoning_effort || "-");
+            if (codexEffort === "-" && upstreamEffort === "-") return "-";
+            return `${codexEffort} -> ${upstreamEffort}`;
+        }
+
         async function fetchJson(url, options = {}) {
             const response = await fetch(url, options);
             const body = await response.json().catch(() => ({}));
@@ -484,8 +491,10 @@
         }
 
         async function loadLogs() {
-            const data = await fetchJson("/api/logs?limit=40");
-            const calls = data.apiCalls || [];
+            const data = await fetchJson("/api/logs?limit=100");
+            const calls = (data.apiCalls || [])
+                .filter((entry) => !(entry.method === "GET" && entry.path === "/v1/models"))
+                .slice(0, 40);
             const logs = document.getElementById("logs");
             if (!calls.length) {
                 logs.innerHTML = '<div class="empty">No API calls yet</div>';
@@ -497,6 +506,7 @@
                     <div>Method</div>
                     <div>Path</div>
                     <div>Model</div>
+                    <div>Reasoning</div>
                     <div>Status</div>
                     <div>Tokens</div>
                     <div>Cost</div>
@@ -506,12 +516,14 @@
                 const codexModel = entry.codex_model || "-";
                 const targetModel = entry.target_model || "-";
                 const mapping = codexModel === "-" && targetModel === "-" ? "-" : `${codexModel} -> ${targetModel}`;
+                const reasoning = fmtReasoning(entry);
                 return `
                 <div class="log">
                     <div class="mono">${fmtTime(entry.timestamp)}</div>
                     <div class="mono">${entry.method}</div>
                     <div class="truncate" title="${esc(entry.path)}">${esc(entry.path)}</div>
                     <div class="mono truncate" title="${esc(mapping)}">${esc(mapping)}</div>
+                    <div class="mono truncate" title="${esc(reasoning)}">${esc(reasoning)}</div>
                     <div class="mono">${entry.status}</div>
                     <div class="mono">${fmtTokenPair(entry)}</div>
                     <div class="mono">${fmtPrice(entry.cost_usd)}</div>
