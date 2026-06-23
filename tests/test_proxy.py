@@ -441,6 +441,85 @@ class ProxyTestCase(unittest.TestCase):
         self.assertEqual(fake_client.calls[0]["messages"][1], {"role": "user", "content": "hello"})
         self.assertEqual(fake_client.calls[0]["max_completion_tokens"], 1024)
 
+    def test_responses_chat_adapter_forwards_reasoning_effort_without_tools(self):
+        fake_client = _FakeOpenAIClient(
+            _FakeCompletion(
+                {
+                    "id": "chatcmpl-reasoning",
+                    "object": "chat.completion",
+                    "created": 123,
+                    "model": "internal-gpt",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+                }
+            )
+        )
+
+        with mock.patch.object(proxy_handler, "OpenAI", return_value=fake_client):
+            response = self.client.post(
+                "/v1/responses",
+                headers=self._headers(),
+                json={
+                    "model": "codex-gpt",
+                    "input": "hello",
+                    "reasoning": {"effort": "medium"},
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(fake_client.calls[0]["reasoning_effort"], "medium")
+
+    def test_responses_chat_adapter_drops_reasoning_effort_with_tools(self):
+        fake_client = _FakeOpenAIClient(
+            _FakeCompletion(
+                {
+                    "id": "chatcmpl-tool-reasoning",
+                    "object": "chat.completion",
+                    "created": 123,
+                    "model": "internal-gpt",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+                }
+            )
+        )
+
+        with mock.patch.object(proxy_handler, "OpenAI", return_value=fake_client):
+            response = self.client.post(
+                "/v1/responses",
+                headers=self._headers(),
+                json={
+                    "model": "codex-gpt",
+                    "input": "inspect repo",
+                    "reasoning": {"effort": "medium"},
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "read_file",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"path": {"type": "string"}},
+                            },
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("tools", fake_client.calls[0])
+        self.assertNotIn("reasoning_effort", fake_client.calls[0])
+
     def test_responses_streaming_translates_chat_chunks_to_responses_sse(self):
         stream = _FakeStream(
             [

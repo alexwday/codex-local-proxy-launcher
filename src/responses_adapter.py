@@ -462,10 +462,10 @@ def build_chat_request_from_responses(
         chat_request["top_p"] = request_payload["top_p"]
     if request_payload.get("parallel_tool_calls") is not None:
         chat_request["parallel_tool_calls"] = request_payload["parallel_tool_calls"]
-    if isinstance(request_payload.get("reasoning"), dict) and request_payload["reasoning"].get("effort"):
+    tools = responses_tools_to_chat_tools(request_payload.get("tools"))
+    if isinstance(request_payload.get("reasoning"), dict) and request_payload["reasoning"].get("effort") and not tools:
         chat_request["reasoning_effort"] = request_payload["reasoning"]["effort"]
 
-    tools = responses_tools_to_chat_tools(request_payload.get("tools"))
     if tools:
         available_tool_names = {tool["function"]["name"] for tool in tools if tool.get("function", {}).get("name")}
         chat_request["tools"] = tools
