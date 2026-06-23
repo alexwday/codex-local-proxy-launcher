@@ -447,6 +447,7 @@ def responses():
             return _handle_responses_streaming_chat_upstream(
                 sdk_payload,
                 public_model,
+                target_model,
                 response_request,
                 full_messages,
                 start_time,
@@ -458,6 +459,7 @@ def responses():
         return _handle_responses_non_streaming_chat_upstream(
             sdk_payload,
             public_model,
+            target_model,
             response_request,
             full_messages,
             start_time,
@@ -538,6 +540,7 @@ def chat_completions():
                 release_inflight_on_return = False
                 return _handle_placeholder_stream(
                     public_model,
+                    target_model,
                     openai_request,
                     start_time,
                     log_manager,
@@ -555,6 +558,9 @@ def chat_completions():
                 response_payload,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                cost_usd=config.calculate_cost(public_model, input_tokens, output_tokens),
+                public_model=public_model,
+                target_model=target_model,
             )
             return jsonify(response_payload), 200
 
@@ -564,7 +570,16 @@ def chat_completions():
                 "authentication_error",
             )
             duration_ms = int((time.time() - start_time) * 1000)
-            log_manager.log_api_call("POST", "/v1/chat/completions", 500, duration_ms, openai_request, error)
+            log_manager.log_api_call(
+                "POST",
+                "/v1/chat/completions",
+                500,
+                duration_ms,
+                openai_request,
+                error,
+                public_model=public_model,
+                target_model=target_model,
+            )
             return jsonify(error), 500
 
         if is_streaming:
@@ -572,6 +587,7 @@ def chat_completions():
             return _handle_streaming(
                 sdk_payload,
                 public_model,
+                target_model,
                 openai_request,
                 start_time,
                 config,
@@ -582,6 +598,7 @@ def chat_completions():
         return _handle_non_streaming(
             sdk_payload,
             public_model,
+            target_model,
             openai_request,
             start_time,
             config,
@@ -595,6 +612,7 @@ def chat_completions():
 def _handle_responses_non_streaming_chat_upstream(
     sdk_payload,
     public_model,
+    target_model,
     response_request,
     full_messages,
     start_time,
@@ -618,17 +636,43 @@ def _handle_responses_non_streaming_chat_upstream(
         )
         _store_response_messages(response_payload["id"], full_messages + [assistant_message])
     except APIStatusError as e:
-        return _handle_openai_status_error(e, response_request, start_time, log_manager, path="/v1/responses")
+        return _handle_openai_status_error(
+            e,
+            response_request,
+            start_time,
+            log_manager,
+            path="/v1/responses",
+            public_model=public_model,
+            target_model=target_model,
+        )
     except (APITimeoutError, APIConnectionError) as e:
         error = openai_error(f"Upstream connection error: {e}", "api_connection_error")
         duration_ms = int((time.time() - start_time) * 1000)
-        log_manager.log_api_call("POST", "/v1/responses", 502, duration_ms, response_request, error)
+        log_manager.log_api_call(
+            "POST",
+            "/v1/responses",
+            502,
+            duration_ms,
+            response_request,
+            error,
+            public_model=public_model,
+            target_model=target_model,
+        )
         return jsonify(error), 502
     except Exception as e:
         logger.exception("Unexpected Responses proxy error")
         error = openai_error(f"Internal proxy error: {e}", "api_error")
         duration_ms = int((time.time() - start_time) * 1000)
-        log_manager.log_api_call("POST", "/v1/responses", 500, duration_ms, response_request, error)
+        log_manager.log_api_call(
+            "POST",
+            "/v1/responses",
+            500,
+            duration_ms,
+            response_request,
+            error,
+            public_model=public_model,
+            target_model=target_model,
+        )
         return jsonify(error), 500
     finally:
         if client is not None:
@@ -647,6 +691,8 @@ def _handle_responses_non_streaming_chat_upstream(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_usd=cost,
+        public_model=public_model,
+        target_model=target_model,
     )
     logger.info("<- responses %s tokens=%s+%s", public_model, input_tokens, output_tokens)
     return jsonify(response_payload), 200
@@ -655,6 +701,7 @@ def _handle_responses_non_streaming_chat_upstream(
 def _handle_responses_streaming_chat_upstream(
     sdk_payload,
     public_model,
+    target_model,
     response_request,
     full_messages,
     start_time,
@@ -676,14 +723,31 @@ def _handle_responses_streaming_chat_upstream(
         stream = client.chat.completions.create(**sdk_payload)
     except APIStatusError as e:
         _release_inflight_request(request_fingerprint)
-        return _handle_openai_status_error(e, response_request, start_time, log_manager, path="/v1/responses")
+        return _handle_openai_status_error(
+            e,
+            response_request,
+            start_time,
+            log_manager,
+            path="/v1/responses",
+            public_model=public_model,
+            target_model=target_model,
+        )
     except (APITimeoutError, APIConnectionError) as e:
         _release_inflight_request(request_fingerprint)
         if client is not None:
             _close_client(client)
         error = openai_error(f"Upstream connection error: {e}", "api_connection_error")
         duration_ms = int((time.time() - start_time) * 1000)
-        log_manager.log_api_call("POST", "/v1/responses", 502, duration_ms, response_request, error)
+        log_manager.log_api_call(
+            "POST",
+            "/v1/responses",
+            502,
+            duration_ms,
+            response_request,
+            error,
+            public_model=public_model,
+            target_model=target_model,
+        )
         return jsonify(error), 502
     except Exception as e:
         _release_inflight_request(request_fingerprint)
@@ -692,7 +756,16 @@ def _handle_responses_streaming_chat_upstream(
         logger.exception("Unexpected Responses streaming setup error")
         error = openai_error(f"Internal proxy error: {e}", "api_error")
         duration_ms = int((time.time() - start_time) * 1000)
-        log_manager.log_api_call("POST", "/v1/responses", 500, duration_ms, response_request, error)
+        log_manager.log_api_call(
+            "POST",
+            "/v1/responses",
+            500,
+            duration_ms,
+            response_request,
+            error,
+            public_model=public_model,
+            target_model=target_model,
+        )
         return jsonify(error), 500
 
     def generate():
@@ -743,6 +816,8 @@ def _handle_responses_streaming_chat_upstream(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost,
+                public_model=public_model,
+                target_model=target_model,
             )
             _release_inflight_request(request_fingerprint)
 
@@ -774,8 +849,10 @@ def _native_responses_headers(config) -> dict[str, str]:
 
 def _handle_native_responses(response_request, start_time, config, log_manager):
     """Forward a non-streaming Responses request to a native Responses upstream."""
+    public_model = response_request.get("model") or config.default_model
+    target_model = ""
     try:
-        payload, public_model, _target_model = _native_responses_payload(config, response_request)
+        payload, public_model, target_model = _native_responses_payload(config, response_request)
         with httpx.Client(verify=config.get_verify_ssl(), timeout=config.request_timeout_seconds) as client:
             upstream = client.post(
                 f"{config.target_endpoint}/responses",
@@ -787,12 +864,30 @@ def _handle_native_responses(response_request, start_time, config, log_manager):
         logger.exception("Native Responses upstream error")
         error = openai_error(f"Upstream connection error: {e}", "api_connection_error")
         duration_ms = int((time.time() - start_time) * 1000)
-        log_manager.log_api_call("POST", "/v1/responses", 502, duration_ms, response_request, error)
+        log_manager.log_api_call(
+            "POST",
+            "/v1/responses",
+            502,
+            duration_ms,
+            response_request,
+            error,
+            public_model=public_model,
+            target_model=target_model,
+        )
         return jsonify(error), 502
 
     if upstream.status_code >= 400:
         duration_ms = int((time.time() - start_time) * 1000)
-        log_manager.log_api_call("POST", "/v1/responses", upstream.status_code, duration_ms, response_request, upstream_payload)
+        log_manager.log_api_call(
+            "POST",
+            "/v1/responses",
+            upstream.status_code,
+            duration_ms,
+            response_request,
+            upstream_payload,
+            public_model=public_model,
+            target_model=target_model,
+        )
         return jsonify(upstream_payload), upstream.status_code
 
     if isinstance(upstream_payload, dict) and upstream_payload.get("model"):
@@ -809,14 +904,18 @@ def _handle_native_responses(response_request, start_time, config, log_manager):
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_usd=config.calculate_cost(public_model, input_tokens, output_tokens),
+        public_model=public_model,
+        target_model=target_model,
     )
     return jsonify(upstream_payload), 200
 
 
 def _handle_native_responses_stream(response_request, start_time, config, log_manager, request_fingerprint):
     """Forward a streaming Responses request to a native Responses upstream."""
+    public_model = response_request.get("model") or config.default_model
+    target_model = ""
     try:
-        payload, public_model, _target_model = _native_responses_payload(config, response_request)
+        payload, public_model, target_model = _native_responses_payload(config, response_request)
         client = httpx.Client(verify=config.get_verify_ssl(), timeout=config.streaming_timeout_seconds)
         upstream = client.stream(
             "POST",
@@ -830,7 +929,16 @@ def _handle_native_responses_stream(response_request, start_time, config, log_ma
         logger.exception("Native Responses streaming setup error")
         error = openai_error(f"Upstream connection error: {e}", "api_connection_error")
         duration_ms = int((time.time() - start_time) * 1000)
-        log_manager.log_api_call("POST", "/v1/responses", 502, duration_ms, response_request, error)
+        log_manager.log_api_call(
+            "POST",
+            "/v1/responses",
+            502,
+            duration_ms,
+            response_request,
+            error,
+            public_model=public_model,
+            target_model=target_model,
+        )
         return jsonify(error), 502
 
     if response.status_code >= 400:
@@ -842,7 +950,16 @@ def _handle_native_responses_stream(response_request, start_time, config, log_ma
         client.close()
         _release_inflight_request(request_fingerprint)
         duration_ms = int((time.time() - start_time) * 1000)
-        log_manager.log_api_call("POST", "/v1/responses", response.status_code, duration_ms, response_request, error_payload)
+        log_manager.log_api_call(
+            "POST",
+            "/v1/responses",
+            response.status_code,
+            duration_ms,
+            response_request,
+            error_payload,
+            public_model=public_model,
+            target_model=target_model,
+        )
         return jsonify(error_payload), response.status_code
 
     def generate():
@@ -872,6 +989,8 @@ def _handle_native_responses_stream(response_request, start_time, config, log_ma
                 duration_ms,
                 response_request,
                 response_for_log,
+                public_model=public_model,
+                target_model=target_model,
             )
             _release_inflight_request(request_fingerprint)
 
@@ -886,7 +1005,7 @@ def _handle_native_responses_stream(response_request, start_time, config, log_ma
     ), 200
 
 
-def _handle_non_streaming(sdk_payload, public_model, openai_request, start_time, config, log_manager):
+def _handle_non_streaming(sdk_payload, public_model, target_model, openai_request, start_time, config, log_manager):
     """Handle a non-streaming Chat Completions request."""
     client = None
     try:
@@ -898,17 +1017,42 @@ def _handle_non_streaming(sdk_payload, public_model, openai_request, start_time,
         completion = client.chat.completions.create(**sdk_payload)
         response_payload = _restore_response_model(_object_to_dict(completion), public_model)
     except APIStatusError as e:
-        return _handle_openai_status_error(e, openai_request, start_time, log_manager)
+        return _handle_openai_status_error(
+            e,
+            openai_request,
+            start_time,
+            log_manager,
+            public_model=public_model,
+            target_model=target_model,
+        )
     except (APITimeoutError, APIConnectionError) as e:
         error = openai_error(f"Upstream connection error: {e}", "api_connection_error")
         duration_ms = int((time.time() - start_time) * 1000)
-        log_manager.log_api_call("POST", "/v1/chat/completions", 502, duration_ms, openai_request, error)
+        log_manager.log_api_call(
+            "POST",
+            "/v1/chat/completions",
+            502,
+            duration_ms,
+            openai_request,
+            error,
+            public_model=public_model,
+            target_model=target_model,
+        )
         return jsonify(error), 502
     except Exception as e:
         logger.exception("Unexpected proxy error")
         error = openai_error(f"Internal proxy error: {e}", "api_error")
         duration_ms = int((time.time() - start_time) * 1000)
-        log_manager.log_api_call("POST", "/v1/chat/completions", 500, duration_ms, openai_request, error)
+        log_manager.log_api_call(
+            "POST",
+            "/v1/chat/completions",
+            500,
+            duration_ms,
+            openai_request,
+            error,
+            public_model=public_model,
+            target_model=target_model,
+        )
         return jsonify(error), 500
     finally:
         if client is not None:
@@ -927,6 +1071,8 @@ def _handle_non_streaming(sdk_payload, public_model, openai_request, start_time,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_usd=cost,
+        public_model=public_model,
+        target_model=target_model,
     )
 
     logger.info("<- %s tokens=%s+%s", public_model, input_tokens, output_tokens)
@@ -936,6 +1082,7 @@ def _handle_non_streaming(sdk_payload, public_model, openai_request, start_time,
 def _handle_streaming(
     sdk_payload,
     public_model,
+    target_model,
     openai_request,
     start_time,
     config,
@@ -955,14 +1102,30 @@ def _handle_streaming(
         stream = client.chat.completions.create(**sdk_payload)
     except APIStatusError as e:
         _release_inflight_request(request_fingerprint)
-        return _handle_openai_status_error(e, openai_request, start_time, log_manager)
+        return _handle_openai_status_error(
+            e,
+            openai_request,
+            start_time,
+            log_manager,
+            public_model=public_model,
+            target_model=target_model,
+        )
     except (APITimeoutError, APIConnectionError) as e:
         _release_inflight_request(request_fingerprint)
         if client is not None:
             _close_client(client)
         error = openai_error(f"Upstream connection error: {e}", "api_connection_error")
         duration_ms = int((time.time() - start_time) * 1000)
-        log_manager.log_api_call("POST", "/v1/chat/completions", 502, duration_ms, openai_request, error)
+        log_manager.log_api_call(
+            "POST",
+            "/v1/chat/completions",
+            502,
+            duration_ms,
+            openai_request,
+            error,
+            public_model=public_model,
+            target_model=target_model,
+        )
         return jsonify(error), 502
     except Exception as e:
         _release_inflight_request(request_fingerprint)
@@ -971,7 +1134,16 @@ def _handle_streaming(
         logger.exception("Unexpected streaming setup error")
         error = openai_error(f"Internal proxy error: {e}", "api_error")
         duration_ms = int((time.time() - start_time) * 1000)
-        log_manager.log_api_call("POST", "/v1/chat/completions", 500, duration_ms, openai_request, error)
+        log_manager.log_api_call(
+            "POST",
+            "/v1/chat/completions",
+            500,
+            duration_ms,
+            openai_request,
+            error,
+            public_model=public_model,
+            target_model=target_model,
+        )
         return jsonify(error), 500
 
     def generate():
@@ -1018,6 +1190,8 @@ def _handle_streaming(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost,
+                public_model=public_model,
+                target_model=target_model,
             )
             _release_inflight_request(request_fingerprint)
 
@@ -1039,7 +1213,15 @@ def _iter_stream(stream: Any) -> Iterable[Any]:
     raise TypeError("Upstream stream response is not iterable")
 
 
-def _handle_openai_status_error(e: APIStatusError, openai_request, start_time, log_manager, path="/v1/chat/completions"):
+def _handle_openai_status_error(
+    e: APIStatusError,
+    openai_request,
+    start_time,
+    log_manager,
+    path="/v1/chat/completions",
+    public_model=None,
+    target_model=None,
+):
     """Forward an OpenAI SDK status error as an OpenAI-compatible payload."""
     status_code = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", 502)
     error_payload = None
@@ -1060,6 +1242,8 @@ def _handle_openai_status_error(e: APIStatusError, openai_request, start_time, l
         duration_ms,
         openai_request,
         error_payload,
+        public_model=public_model,
+        target_model=target_model,
     )
     return jsonify(error_payload), status_code
 
@@ -1094,7 +1278,12 @@ def _handle_placeholder_responses(response_request, start_time, log_manager):
     """Handle placeholder non-streaming Responses output."""
     response_id = make_response_id()
     created = int(time.time())
-    public_model = response_request.get("model") or get_config().default_model or "gpt-5.5"
+    config = get_config()
+    public_model = response_request.get("model") or config.default_model or "gpt-5.5"
+    try:
+        _resolved_public_model, target_model = config.resolve_target_model(public_model)
+    except ValueError:
+        target_model = public_model
     output_text = "Codex Local Proxy placeholder response."
     response_payload = response_shell(
         response_id,
@@ -1139,6 +1328,9 @@ def _handle_placeholder_responses(response_request, start_time, log_manager):
         response_payload,
         input_tokens=12,
         output_tokens=6,
+        cost_usd=config.calculate_cost(public_model, 12, 6),
+        public_model=public_model,
+        target_model=target_model,
     )
     return jsonify(response_payload), 200
 
@@ -1156,7 +1348,12 @@ def _handle_placeholder_responses_stream(response_request, start_time, log_manag
     """Handle placeholder streaming Responses output."""
     response_id = make_response_id()
     created = int(time.time())
-    public_model = response_request.get("model") or get_config().default_model or "gpt-5.5"
+    config = get_config()
+    public_model = response_request.get("model") or config.default_model or "gpt-5.5"
+    try:
+        _resolved_public_model, target_model = config.resolve_target_model(public_model)
+    except ValueError:
+        target_model = public_model
     item_id = f"msg_{created}"
     output_text = "Codex Local Proxy placeholder response."
 
@@ -1254,6 +1451,9 @@ def _handle_placeholder_responses_stream(response_request, start_time, log_manag
                 final_response,
                 input_tokens=12,
                 output_tokens=6,
+                cost_usd=config.calculate_cost(public_model, 12, 6),
+                public_model=public_model,
+                target_model=target_model,
             )
         finally:
             _release_inflight_request(request_fingerprint)
@@ -1269,7 +1469,7 @@ def _handle_placeholder_responses_stream(response_request, start_time, log_manag
     ), 200
 
 
-def _handle_placeholder_stream(public_model, openai_request, start_time, log_manager, request_fingerprint):
+def _handle_placeholder_stream(public_model, target_model, openai_request, start_time, log_manager, request_fingerprint):
     """Handle placeholder streaming response."""
     created = int(time.time())
 
@@ -1335,6 +1535,9 @@ def _handle_placeholder_stream(public_model, openai_request, start_time, log_man
                 {"streaming": True, "placeholder": True},
                 input_tokens=12,
                 output_tokens=6,
+                cost_usd=get_config().calculate_cost(public_model, 12, 6),
+                public_model=public_model,
+                target_model=target_model,
             )
         finally:
             _release_inflight_request(request_fingerprint)

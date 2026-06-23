@@ -175,6 +175,13 @@ class ProxyTestCase(unittest.TestCase):
         self.assertEqual(usage["total_input_tokens"], 7)
         self.assertEqual(usage["total_output_tokens"], 3)
         self.assertEqual(usage["total_cost_usd"], 0.013)
+        self.assertEqual(usage["by_model"]["codex-gpt"]["input_tokens"], 7)
+        self.assertEqual(usage["by_model"]["codex-gpt"]["output_tokens"], 3)
+
+        call = self.app.config["LOG_MANAGER"].get_api_calls(1)[0]
+        self.assertEqual(call["codex_model"], "codex-gpt")
+        self.assertEqual(call["target_model"], "internal-gpt")
+        self.assertAlmostEqual(call["cost_usd"], 0.013)
 
     def test_model_pricing_table_and_cost_calculation(self):
         self.assertEqual(
@@ -195,8 +202,27 @@ class ProxyTestCase(unittest.TestCase):
                 "input_cost_per_1k": 1.0,
                 "output_cost_per_1k": 2.0,
                 "configured": True,
+                "session_requests": 0,
+                "session_input_tokens": 0,
+                "session_output_tokens": 0,
+                "session_total_tokens": 0,
+                "session_cost_usd": 0.0,
             },
         )
+
+        table = self.config.get_model_pricing_table(
+            {
+                "codex-gpt": {
+                    "requests": 2,
+                    "input_tokens": 1000,
+                    "output_tokens": 2000,
+                    "cost_usd": 5.0,
+                }
+            }
+        )
+        self.assertEqual(table[0]["session_requests"], 2)
+        self.assertEqual(table[0]["session_total_tokens"], 3000)
+        self.assertEqual(table[0]["session_cost_usd"], 5.0)
 
     def test_legacy_per_million_pricing_is_converted_to_per_1k(self):
         with mock.patch.dict(
@@ -438,6 +464,12 @@ class ProxyTestCase(unittest.TestCase):
         self.assertEqual(payload["usage"]["input_tokens"], 7)
         self.assertEqual(fake_client.calls[0]["model"], "internal-gpt")
         self.assertEqual(fake_client.calls[0]["messages"][0], {"role": "system", "content": "You are terse."})
+
+        call = self.app.config["LOG_MANAGER"].get_api_calls(1)[0]
+        self.assertEqual(call["path"], "/v1/responses")
+        self.assertEqual(call["codex_model"], "codex-gpt")
+        self.assertEqual(call["target_model"], "internal-gpt")
+        self.assertAlmostEqual(call["cost_usd"], 0.013)
         self.assertEqual(fake_client.calls[0]["messages"][1], {"role": "user", "content": "hello"})
         self.assertEqual(fake_client.calls[0]["max_completion_tokens"], 1024)
 
@@ -1230,6 +1262,8 @@ class ProxyTestCase(unittest.TestCase):
             input_tokens=10,
             output_tokens=4,
             cost_usd=0.1234,
+            public_model="codex-gpt",
+            target_model="internal-gpt",
         )
         stats = manager.get_usage_stats()
         self.assertEqual(stats["failed_requests"], 1)
@@ -1237,6 +1271,12 @@ class ProxyTestCase(unittest.TestCase):
         self.assertEqual(stats["total_output_tokens"], 4)
         self.assertEqual(stats["total_tokens"], 14)
         self.assertEqual(stats["total_cost_usd"], 0.1234)
+        self.assertEqual(stats["by_model"]["codex-gpt"]["failed_requests"], 1)
+        self.assertEqual(stats["by_model"]["codex-gpt"]["cost_usd"], 0.1234)
+
+        calls = manager.get_api_calls()
+        self.assertEqual(calls[0]["codex_model"], "codex-gpt")
+        self.assertEqual(calls[0]["target_model"], "internal-gpt")
 
     def test_logger_extracts_dashboard_error_message(self):
         manager = LoggerManager()

@@ -164,7 +164,7 @@
 
         .stats {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
             gap: 10px;
         }
 
@@ -189,6 +189,10 @@
             width: 100%;
             border-collapse: collapse;
             font-size: 12px;
+        }
+
+        .table-wrap {
+            overflow-x: auto;
         }
 
         th, td {
@@ -226,13 +230,21 @@
 
         .log {
             display: grid;
-            grid-template-columns: 74px 54px minmax(120px, 1fr) 64px 76px;
+            grid-template-columns: 74px 54px minmax(110px, 0.8fr) minmax(160px, 1fr) 58px 82px 82px 72px;
             gap: 8px;
             align-items: center;
             padding: 8px 10px;
             border-radius: 7px;
             background: var(--surface-alt);
             font-size: 12px;
+        }
+
+        .log.header {
+            background: transparent;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
         }
 
         .empty {
@@ -325,6 +337,7 @@
                 <div class="stat"><div class="stat-label">Success Rate</div><div class="stat-value" id="successRate">100%</div></div>
                 <div class="stat"><div class="stat-label">Input Tokens</div><div class="stat-value" id="inputTokens">0</div></div>
                 <div class="stat"><div class="stat-label">Output Tokens</div><div class="stat-value" id="outputTokens">0</div></div>
+                <div class="stat"><div class="stat-label">Session Cost</div><div class="stat-value" id="sessionCost">$0.0000</div></div>
             </div>
         </section>
 
@@ -380,6 +393,20 @@
             return new Date(timestamp * 1000).toLocaleTimeString();
         }
 
+        function esc(value) {
+            return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+            }[char]));
+        }
+
+        function fmtTokenPair(entry) {
+            return `${fmtNumber(entry.input_tokens)} / ${fmtNumber(entry.output_tokens)}`;
+        }
+
         async function fetchJson(url, options = {}) {
             const response = await fetch(url, options);
             const body = await response.json().catch(() => ({}));
@@ -416,19 +443,34 @@
                 table.innerHTML = '<div class="empty">No models configured</div>';
             } else {
                 table.innerHTML = `
-                    <table>
-                        <thead><tr><th>Codex Model</th><th>Upstream Model</th><th>Input / 1K</th><th>Output / 1K</th></tr></thead>
-                        <tbody>
-                            ${rows.map((row) => `
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
                                 <tr>
-                                    <td class="mono">${row.model}</td>
-                                    <td class="mono">${row.target_model}</td>
-                                    <td class="mono">${fmtPrice(row.input_cost_per_1k)}</td>
-                                    <td class="mono">${fmtPrice(row.output_cost_per_1k)}</td>
+                                    <th>Codex Model</th>
+                                    <th>Upstream Model</th>
+                                    <th>Input / 1K</th>
+                                    <th>Output / 1K</th>
+                                    <th>Requests</th>
+                                    <th>Session Tokens</th>
+                                    <th>Session Cost</th>
                                 </tr>
-                            `).join("")}
-                        </tbody>
-                    </table>`;
+                            </thead>
+                            <tbody>
+                                ${rows.map((row) => `
+                                    <tr>
+                                        <td class="mono">${esc(row.model)}</td>
+                                        <td class="mono">${esc(row.target_model)}</td>
+                                        <td class="mono">${fmtPrice(row.input_cost_per_1k)}</td>
+                                        <td class="mono">${fmtPrice(row.output_cost_per_1k)}</td>
+                                        <td class="mono">${fmtNumber(row.session_requests)}</td>
+                                        <td class="mono" title="${fmtNumber(row.session_input_tokens)} input / ${fmtNumber(row.session_output_tokens)} output">${fmtNumber(row.session_total_tokens)}</td>
+                                        <td class="mono">${fmtPrice(row.session_cost_usd)}</td>
+                                    </tr>
+                                `).join("")}
+                            </tbody>
+                        </table>
+                    </div>`;
             }
         }
 
@@ -438,6 +480,7 @@
             setText("successRate", `${usage.success_rate}%`);
             setText("inputTokens", fmtNumber(usage.total_input_tokens));
             setText("outputTokens", fmtNumber(usage.total_output_tokens));
+            setText("sessionCost", fmtPrice(usage.total_cost_usd));
         }
 
         async function loadLogs() {
@@ -448,15 +491,34 @@
                 logs.innerHTML = '<div class="empty">No API calls yet</div>';
                 return;
             }
-            logs.innerHTML = calls.map((entry) => `
+            const header = `
+                <div class="log header">
+                    <div>Time</div>
+                    <div>Method</div>
+                    <div>Path</div>
+                    <div>Model</div>
+                    <div>Status</div>
+                    <div>Tokens</div>
+                    <div>Cost</div>
+                    <div>Duration</div>
+                </div>`;
+            const rows = calls.map((entry) => {
+                const codexModel = entry.codex_model || "-";
+                const targetModel = entry.target_model || "-";
+                const mapping = codexModel === "-" && targetModel === "-" ? "-" : `${codexModel} -> ${targetModel}`;
+                return `
                 <div class="log">
                     <div class="mono">${fmtTime(entry.timestamp)}</div>
                     <div class="mono">${entry.method}</div>
-                    <div class="truncate" title="${entry.path}">${entry.path}</div>
+                    <div class="truncate" title="${esc(entry.path)}">${esc(entry.path)}</div>
+                    <div class="mono truncate" title="${esc(mapping)}">${esc(mapping)}</div>
                     <div class="mono">${entry.status}</div>
+                    <div class="mono">${fmtTokenPair(entry)}</div>
+                    <div class="mono">${fmtPrice(entry.cost_usd)}</div>
                     <div class="mono">${entry.duration_ms}ms</div>
-                </div>
-            `).join("");
+                </div>`;
+            }).join("");
+            logs.innerHTML = header + rows;
         }
 
         async function refreshAll() {

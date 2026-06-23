@@ -88,7 +88,9 @@ def require_dashboard_auth(handler):
 def get_configuration():
     """Get current configuration with sensitive data redacted."""
     config = get_config()
+    log_manager = get_log_manager()
     config_dict = config.to_dict()
+    config_dict["model_pricing_table"] = config.get_model_pricing_table(log_manager.get_model_usage())
     codex_status = get_codex_status(config)
     config_dict.update(
         {
@@ -126,13 +128,14 @@ def get_setup():
 def get_models():
     """Get model options and mappings."""
     config = get_config()
+    log_manager = get_log_manager()
     return jsonify(
         {
             "models": config.get_public_model_names(),
             "defaultModel": config.default_model,
             "mapping": config.model_mapping,
             "pricing": config.model_pricing,
-            "pricingTable": config.get_model_pricing_table(),
+            "pricingTable": config.get_model_pricing_table(log_manager.get_model_usage()),
             "strictAllowlist": config.strict_model_allowlist,
         }
     )

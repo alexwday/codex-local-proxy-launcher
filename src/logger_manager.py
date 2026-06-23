@@ -20,6 +20,7 @@ class UsageStats:
     total_latency_ms: int = 0
     total_cost_usd: float = 0.0
     session_start: float = field(default_factory=time.time)
+    by_model: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     @property
     def success_rate(self) -> float:
@@ -49,6 +50,13 @@ class UsageStats:
             'avg_latency_ms': round(self.avg_latency_ms, 0),
             'session_duration_seconds': round(self.session_duration_seconds, 0),
             'total_cost_usd': round(self.total_cost_usd, 4),
+            'by_model': {
+                model: {
+                    **usage,
+                    'cost_usd': round(float(usage.get('cost_usd', 0.0)), 4),
+                }
+                for model, usage in sorted(self.by_model.items())
+            },
         }
 
 
@@ -71,15 +79,20 @@ class LoggerManager:
         response_data: Optional[Dict] = None,
         input_tokens: int = 0,
         output_tokens: int = 0,
-        cost_usd: float = 0.0
+        cost_usd: float = 0.0,
+        public_model: Optional[str] = None,
+        target_model: Optional[str] = None,
     ):
         """Log an API call with optional request/response data."""
+        codex_model = public_model or self._extract_model(request_data) or self._extract_model(response_data)
         entry = {
             'timestamp': time.time(),
             'method': method,
             'path': path,
             'status': status,
             'duration_ms': duration_ms,
+            'codex_model': codex_model or '',
+            'target_model': target_model or '',
             'request': self._sanitize_for_log(request_data),
             'response': self._sanitize_for_log(response_data),
             'error_message': self._extract_error_message(response_data) if status >= 400 else '',
@@ -104,13 +117,34 @@ class LoggerManager:
         self.usage.total_input_tokens += input_tokens
         self.usage.total_output_tokens += output_tokens
         self.usage.total_cost_usd += cost_usd
+        if codex_model:
+            model_usage = self.usage.by_model.setdefault(
+                codex_model,
+                {
+                    'requests': 0,
+                    'successful_requests': 0,
+                    'failed_requests': 0,
+                    'input_tokens': 0,
+                    'output_tokens': 0,
+                    'cost_usd': 0.0,
+                },
+            )
+            model_usage['requests'] += 1
+            if status < 400:
+                model_usage['successful_requests'] += 1
+            else:
+                model_usage['failed_requests'] += 1
+            model_usage['input_tokens'] += input_tokens
+            model_usage['output_tokens'] += output_tokens
+            model_usage['cost_usd'] += cost_usd
 
         # Log summary
         token_info = ""
         if input_tokens or output_tokens:
             cost_str = f"${cost_usd:.4f}" if cost_usd > 0 else ""
             token_info = f" | tokens: {input_tokens}+{output_tokens}" + (f" ({cost_str})" if cost_str else "")
-        logger.info(f"{method} {path} -> {status} ({duration_ms}ms){token_info}")
+        model_info = f" | model: {codex_model}->{target_model}" if codex_model and target_model else ""
+        logger.info(f"{method} {path} -> {status} ({duration_ms}ms){model_info}{token_info}")
 
     def log_server_event(self, level: str, message: str, data: Optional[Dict] = None):
         """Log a server event."""
@@ -138,6 +172,10 @@ class LoggerManager:
     def get_usage_stats(self) -> Dict:
         """Get current usage statistics."""
         return self.usage.to_dict()
+
+    def get_model_usage(self) -> Dict:
+        """Get current per-model usage keyed by Codex-facing model name."""
+        return self.usage.to_dict()['by_model']
 
     def clear_logs(self):
         """Clear all logs (but preserve usage stats)."""
@@ -174,6 +212,13 @@ class LoggerManager:
                 return str(value)
 
         return ""
+
+    def _extract_model(self, data: Optional[Dict]) -> str:
+        """Extract model from common request/response payload shapes."""
+        if not isinstance(data, dict):
+            return ""
+        model = data.get('model')
+        return str(model) if model else ""
 
     def _sanitize_for_log(self, data: Optional[Dict]) -> Optional[Dict]:
         """Sanitize data for logging (truncate large content)."""

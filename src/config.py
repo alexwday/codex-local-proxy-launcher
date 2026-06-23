@@ -383,11 +383,15 @@ class Config:
         output_cost = (output_tokens / 1_000) * pricing["output"]
         return input_cost + output_cost
 
-    def get_model_pricing_table(self) -> list[dict[str, Any]]:
+    def get_model_pricing_table(self, usage_by_model: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         """Return model pricing and mapping rows for dashboard display."""
         rows = []
+        usage_by_model = usage_by_model or {}
         for model in self.model_options:
             pricing = self.model_pricing.get(model, {})
+            usage = usage_by_model.get(model, {})
+            input_tokens = int(usage.get("input_tokens") or 0)
+            output_tokens = int(usage.get("output_tokens") or 0)
             rows.append(
                 {
                     "model": model,
@@ -395,6 +399,11 @@ class Config:
                     "input_cost_per_1k": pricing.get("input"),
                     "output_cost_per_1k": pricing.get("output"),
                     "configured": model in self.model_pricing,
+                    "session_requests": int(usage.get("requests") or 0),
+                    "session_input_tokens": input_tokens,
+                    "session_output_tokens": output_tokens,
+                    "session_total_tokens": input_tokens + output_tokens,
+                    "session_cost_usd": float(usage.get("cost_usd") or 0.0),
                 }
             )
         return rows
