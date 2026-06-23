@@ -24,6 +24,7 @@ from responses_adapter import (
     unsupported_input_content_types,
     unsupported_tool_types,
 )
+from usage_extractor import extract_usage_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +231,19 @@ def _split_sdk_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return sdk_payload
 
 
+def _ensure_stream_usage_options(payload: dict[str, Any]) -> None:
+    """Ask Chat Completions upstreams to include final usage in streaming chunks."""
+    if not payload.get("stream"):
+        return
+    stream_options = payload.get("stream_options")
+    if not isinstance(stream_options, dict):
+        stream_options = {}
+    else:
+        stream_options = dict(stream_options)
+    stream_options["include_usage"] = True
+    payload["stream_options"] = stream_options
+
+
 def _prepare_upstream_request(config, openai_request: dict[str, Any]) -> tuple[dict[str, Any], str, str]:
     """Return (sdk_payload, public_model, target_model)."""
     upstream_request = dict(openai_request)
@@ -237,6 +251,7 @@ def _prepare_upstream_request(config, openai_request: dict[str, Any]) -> tuple[d
     upstream_request["model"] = target_model
 
     config.apply_completion_token_limit(upstream_request)
+    _ensure_stream_usage_options(upstream_request)
 
     return _split_sdk_payload(upstream_request), public_model, target_model
 
@@ -264,25 +279,7 @@ def _restore_response_model(payload: dict[str, Any], public_model: str) -> dict[
 
 def _extract_usage_tokens(payload: dict[str, Any]) -> tuple[int, int]:
     """Extract prompt/completion usage from OpenAI-compatible response shapes."""
-    usage = payload.get("usage") if isinstance(payload, dict) else None
-    if not isinstance(usage, dict):
-        return 0, 0
-
-    input_tokens = (
-        usage.get("prompt_tokens")
-        or usage.get("input_tokens")
-        or usage.get("promptTokens")
-        or usage.get("inputTokens")
-        or 0
-    )
-    output_tokens = (
-        usage.get("completion_tokens")
-        or usage.get("output_tokens")
-        or usage.get("completionTokens")
-        or usage.get("outputTokens")
-        or 0
-    )
-    return int(input_tokens or 0), int(output_tokens or 0)
+    return extract_usage_tokens(payload)
 
 
 def _extract_reasoning_effort(payload: dict[str, Any] | None) -> str:

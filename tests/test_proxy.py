@@ -392,9 +392,9 @@ class ProxyTestCase(unittest.TestCase):
                                 "index": 0,
                                 "delta": {"content": "hi"},
                                 "finish_reason": "stop",
+                                "usage": {"prompt_token_count": "5", "completion_token_count": 1},
                             }
                         ],
-                        "usage": {"prompt_tokens": 5, "completion_tokens": 1},
                     }
                 ),
             ]
@@ -419,6 +419,7 @@ class ProxyTestCase(unittest.TestCase):
         lines = [line for line in body.splitlines() if line.startswith("data: {")]
         first_payload = json.loads(lines[0][6:])
         self.assertEqual(first_payload["model"], "codex-gpt")
+        self.assertEqual(fake_client.calls[0]["stream_options"], {"include_usage": True})
         self.assertTrue(stream.closed)
         self.assertTrue(fake_client.closed)
 
@@ -581,9 +582,13 @@ class ProxyTestCase(unittest.TestCase):
                         "created": 124,
                         "model": "internal-gpt",
                         "choices": [
-                            {"index": 0, "delta": {"content": "llo"}, "finish_reason": "stop"}
+                            {
+                                "index": 0,
+                                "delta": {"content": "llo"},
+                                "finish_reason": "stop",
+                                "usage": {"inputTokenCount": 5, "outputTokenCount": "1"},
+                            }
                         ],
-                        "usage": {"prompt_tokens": 5, "completion_tokens": 1},
                     }
                 ),
             ]
@@ -604,6 +609,11 @@ class ProxyTestCase(unittest.TestCase):
         self.assertIn("event: response.output_text.delta", body)
         self.assertIn("event: response.completed", body)
         self.assertIn('"text":"hello"', body)
+        self.assertEqual(fake_client.calls[0]["stream_options"], {"include_usage": True})
+
+        usage = self.app.config["LOG_MANAGER"].get_usage_stats()
+        self.assertEqual(usage["total_input_tokens"], 5)
+        self.assertEqual(usage["total_output_tokens"], 1)
 
     def test_responses_streaming_preserves_custom_tool_call_shape(self):
         stream = _FakeStream(

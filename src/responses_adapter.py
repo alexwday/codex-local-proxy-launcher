@@ -8,6 +8,8 @@ import time
 import uuid
 from typing import Any
 
+from usage_extractor import extract_usage_tokens, extract_usage_tokens_optional
+
 
 CHAT_MAPPABLE_RESPONSE_TOOL_TYPES = {"function", "custom"}
 CHAT_IGNORED_RESPONSE_TOOL_TYPES = {"tool_search", "web_search"}
@@ -453,6 +455,8 @@ def build_chat_request_from_responses(
         "messages": messages,
         "stream": bool(request_payload.get("stream", False)),
     }
+    if chat_request["stream"]:
+        chat_request["stream_options"] = {"include_usage": True}
 
     if request_payload.get("max_output_tokens") is not None:
         chat_request["max_completion_tokens"] = request_payload["max_output_tokens"]
@@ -484,26 +488,81 @@ def build_chat_request_from_responses(
 
 
 def extract_response_usage_tokens(payload: dict[str, Any]) -> tuple[int, int]:
-    usage = payload.get("usage") if isinstance(payload, dict) else None
-    if not isinstance(usage, dict):
-        return 0, 0
-    input_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
-    output_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
-    return int(input_tokens or 0), int(output_tokens or 0)
+    return extract_usage_tokens(payload)
 
 
-def chat_usage_to_response_usage(usage: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(usage, dict):
+def chat_usage_to_response_usage(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
         return None
-    input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
-    output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
-    return {
-        "input_tokens": input_tokens,
-        "input_tokens_details": {"cached_tokens": int(usage.get("cached_tokens") or 0)},
-        "output_tokens": output_tokens,
-        "output_tokens_details": {"reasoning_tokens": int(usage.get("reasoning_tokens") or 0)},
-        "total_tokens": int(usage.get("total_tokens") or input_tokens + output_tokens),
-    }
+    for usage in _usage_candidates(payload):
+        input_tokens_optional, output_tokens_optional = extract_usage_tokens_optional(usage)
+        if input_tokens_optional is None and output_tokens_optional is None:
+            continue
+        input_tokens = input_tokens_optional or 0
+        output_tokens = output_tokens_optional or 0
+        return {
+            "input_tokens": input_tokens,
+            "input_tokens_details": {"cached_tokens": _cached_tokens(usage)},
+            "output_tokens": output_tokens,
+            "output_tokens_details": {"reasoning_tokens": _reasoning_tokens(usage)},
+            "total_tokens": _first_token_int(
+                usage,
+                ["total_tokens", "total_token_count", "totalTokens", "totalTokenCount"],
+                default=input_tokens + output_tokens,
+            ),
+        }
+    return None
+
+
+def _usage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = [payload]
+    choices = payload.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            candidates.append(choice)
+            delta = choice.get("delta")
+            if isinstance(delta, dict):
+                candidates.append(delta)
+            message = choice.get("message")
+            if isinstance(message, dict):
+                candidates.append(message)
+    return candidates
+
+
+def _first_token_int(usage: dict[str, Any], keys: list[str], default: int = 0) -> int:
+    for key in keys:
+        value = usage.get(key)
+        if value is None:
+            continue
+        try:
+            return max(int(float(value)), 0)
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def _cached_tokens(usage: dict[str, Any]) -> int:
+    if isinstance(usage.get("usage"), dict):
+        usage = usage["usage"]
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached = _first_token_int(details, ["cached_tokens"])
+        if cached:
+            return cached
+    return _first_token_int(usage, ["cached_tokens", "cache_read_input_tokens", "cachedTokens"])
+
+
+def _reasoning_tokens(usage: dict[str, Any]) -> int:
+    if isinstance(usage.get("usage"), dict):
+        usage = usage["usage"]
+    details = usage.get("completion_tokens_details") or usage.get("output_tokens_details")
+    if isinstance(details, dict):
+        reasoning = _first_token_int(details, ["reasoning_tokens", "reasoningTokens"])
+        if reasoning:
+            return reasoning
+    return _first_token_int(usage, ["reasoning_tokens", "reasoningTokens"])
 
 
 def chat_message_to_response_output(
@@ -579,7 +638,7 @@ def response_payload_from_chat_completion(
     output = chat_message_to_response_output(message, original_request)
     finish_reason = choice.get("finish_reason")
     status = "incomplete" if finish_reason == "length" else "completed"
-    usage = chat_usage_to_response_usage(completion_payload.get("usage"))
+    usage = chat_usage_to_response_usage(completion_payload)
     response = {
         "id": response_id,
         "object": "response",
@@ -876,8 +935,9 @@ class ResponseStreamAdapter:
 
     def chunk_events(self, chunk_payload: dict[str, Any]) -> list[str]:
         events: list[str] = []
-        if isinstance(chunk_payload.get("usage"), dict):
-            self.usage = chat_usage_to_response_usage(chunk_payload["usage"])
+        usage = chat_usage_to_response_usage(chunk_payload)
+        if usage:
+            self.usage = usage
 
         for choice in chunk_payload.get("choices") or []:
             delta = choice.get("delta") or {}
