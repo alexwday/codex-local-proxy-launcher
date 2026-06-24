@@ -893,6 +893,24 @@ def _native_responses_headers(config) -> dict[str, str]:
     }
 
 
+def _restore_native_responses_stream_model(data: dict[str, Any], public_model: str) -> dict[str, Any]:
+    """Rewrite streamed native Responses model fields back to the Codex-facing model."""
+    if not isinstance(data, dict) or not public_model:
+        return data
+
+    restored = dict(data)
+    if restored.get("model"):
+        restored["model"] = public_model
+
+    response_payload = restored.get("response")
+    if isinstance(response_payload, dict) and response_payload.get("model"):
+        restored_response = dict(response_payload)
+        restored_response["model"] = public_model
+        restored["response"] = restored_response
+
+    return restored
+
+
 def _handle_native_responses(response_request, start_time, config, log_manager):
     """Forward a non-streaming Responses request to a native Responses upstream."""
     public_model = response_request.get("model") or config.default_model
@@ -1017,11 +1035,45 @@ def _handle_native_responses_stream(response_request, start_time, config, log_ma
 
     def generate():
         status = 200
+        input_tokens = 0
+        output_tokens = 0
         response_for_log: dict[str, Any] = {"streaming": True, "native_responses": True}
+        current_event = ""
         try:
-            for chunk in response.iter_bytes():
-                if chunk:
-                    yield chunk
+            for line in response.iter_lines():
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8", errors="replace")
+                if not line:
+                    yield "\n"
+                    continue
+                if line.startswith("event:"):
+                    current_event = line.split(":", 1)[1].strip()
+                    yield line + "\n"
+                    continue
+                if not line.startswith("data:"):
+                    yield line + "\n"
+                    continue
+
+                raw_data = line.split(":", 1)[1].strip()
+                if raw_data == "[DONE]":
+                    yield line + "\n"
+                    continue
+                try:
+                    event_data = json.loads(raw_data)
+                except json.JSONDecodeError:
+                    yield line + "\n"
+                    continue
+
+                if isinstance(event_data, dict):
+                    event_data = _restore_native_responses_stream_model(event_data, public_model)
+                    event_type = event_data.get("type") or current_event
+                    response_payload = event_data.get("response")
+                    if event_type == "response.completed" and isinstance(response_payload, dict):
+                        response_for_log = response_payload
+                        input_tokens, output_tokens = extract_response_usage_tokens(response_payload)
+                    yield f"data: {json.dumps(event_data, separators=(',', ':'))}\n"
+                else:
+                    yield line + "\n"
         except GeneratorExit:
             status = 499
             response_for_log = {"streaming": True, "cancelled": True}
@@ -1035,6 +1087,7 @@ def _handle_native_responses_stream(response_request, start_time, config, log_ma
             upstream.__exit__(None, None, None)
             client.close()
             duration_ms = int((time.time() - start_time) * 1000)
+            cost = config.calculate_cost(public_model, input_tokens, output_tokens)
             log_manager.log_api_call(
                 "POST",
                 "/v1/responses",
@@ -1042,6 +1095,9 @@ def _handle_native_responses_stream(response_request, start_time, config, log_ma
                 duration_ms,
                 response_request,
                 response_for_log,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost,
                 public_model=public_model,
                 target_model=target_model,
                 **reasoning_metadata,

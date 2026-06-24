@@ -72,6 +72,8 @@ CODEX_UPSTREAM_WIRE_API=responses
 TARGET_ENDPOINT=<native Responses upstream /v1 endpoint>
 ```
 
+In native mode the launcher forwards Responses payloads directly after applying model mapping. The Chat Completions fallback adapter is skipped, so reasoning effort is not stripped for function/tool calls and hosted Responses tools are not rejected by the local adapter.
+
 Before switching the launcher to native mode, test the upstream directly with the copied `src/.env`:
 
 ```bash

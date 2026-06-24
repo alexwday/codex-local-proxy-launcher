@@ -74,6 +74,49 @@ class _FakeOAuthTokenResponse:
         return dict(self._payload)
 
 
+class _FakeHTTPXStreamResponse:
+    def __init__(self, lines, status_code=200, headers=None, text=""):
+        self._lines = lines
+        self.status_code = status_code
+        self.headers = headers or {"content-type": "text/event-stream"}
+        self.text = text
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+    def json(self):
+        return json.loads(self.text or "{}")
+
+
+class _FakeHTTPXStreamContext:
+    def __init__(self, response):
+        self.response = response
+        self.closed = False
+
+    def __enter__(self):
+        return self.response
+
+    def __exit__(self, exc_type, exc, tb):
+        self.closed = True
+        return False
+
+
+class _FakeHTTPXClient:
+    def __init__(self, stream_response=None):
+        self.stream_response = stream_response
+        self.stream_calls = []
+        self.closed = False
+        self.stream_context = None
+
+    def stream(self, method, url, headers=None, json=None):
+        self.stream_calls.append({"method": method, "url": url, "headers": headers, "json": json})
+        self.stream_context = _FakeHTTPXStreamContext(self.stream_response)
+        return self.stream_context
+
+    def close(self):
+        self.closed = True
+
+
 class ProxyTestCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -614,6 +657,54 @@ class ProxyTestCase(unittest.TestCase):
         usage = self.app.config["LOG_MANAGER"].get_usage_stats()
         self.assertEqual(usage["total_input_tokens"], 5)
         self.assertEqual(usage["total_output_tokens"], 1)
+
+    def test_native_responses_stream_rewrites_model_and_tracks_usage(self):
+        self.config.upstream_wire_api = "responses"
+        stream_response = _FakeHTTPXStreamResponse(
+            [
+                "event: response.created",
+                'data: {"type":"response.created","response":{"id":"resp_1","model":"internal-gpt","status":"in_progress"}}',
+                "",
+                "event: response.completed",
+                (
+                    'data: {"type":"response.completed","response":{"id":"resp_1","model":"internal-gpt",'
+                    '"status":"completed","output":[],"usage":{"input_tokens":9,"output_tokens":4,"total_tokens":13}}}'
+                ),
+                "",
+            ]
+        )
+        fake_client = _FakeHTTPXClient(stream_response=stream_response)
+
+        with mock.patch.object(proxy_handler.httpx, "Client", return_value=fake_client):
+            response = self.client.post(
+                "/v1/responses",
+                headers=self._headers(),
+                json={
+                    "model": "codex-gpt",
+                    "input": "hello",
+                    "reasoning": {"effort": "high"},
+                    "stream": True,
+                },
+                buffered=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(fake_client.stream_calls[0]["json"]["model"], "internal-gpt")
+        self.assertEqual(fake_client.stream_calls[0]["json"]["reasoning"], {"effort": "high"})
+        body = response.get_data(as_text=True)
+        self.assertIn('"model":"codex-gpt"', body)
+        self.assertNotIn('"model":"internal-gpt"', body)
+        self.assertTrue(fake_client.stream_context.closed)
+        self.assertTrue(fake_client.closed)
+
+        call = self.app.config["LOG_MANAGER"].get_api_calls(1)[0]
+        self.assertEqual(call["codex_model"], "codex-gpt")
+        self.assertEqual(call["target_model"], "internal-gpt")
+        self.assertEqual(call["input_tokens"], 9)
+        self.assertEqual(call["output_tokens"], 4)
+        self.assertEqual(call["codex_reasoning_effort"], "high")
+        self.assertEqual(call["upstream_reasoning_effort"], "high")
+        self.assertFalse(call["reasoning_effort_removed"])
 
     def test_responses_streaming_preserves_custom_tool_call_shape(self):
         stream = _FakeStream(
