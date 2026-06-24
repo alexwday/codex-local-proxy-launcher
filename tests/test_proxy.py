@@ -138,9 +138,13 @@ class ProxyTestCase(unittest.TestCase):
                 "TARGET_ENDPOINT": "https://internal.example.test/v1",
                 "MODEL_OPTIONS": "codex-gpt,codex-mini",
                 "MODEL_MAPPING": "codex-gpt=internal-gpt,codex-mini=internal-mini",
+                "CODEX_MODEL_ALIASES": "",
+                "MODEL_ALIASES": "",
+                "CODEX_INTERNAL_MODEL_FALLBACK": "",
                 "MODEL_PRICING_USD_PER_1K": "codex-gpt=1/2,codex-mini=0.1/0.2",
                 "MODEL_PRICING_USD_PER_MILLION": "",
                 "DEFAULT_MODEL": "codex-gpt",
+                "STRICT_MODEL_ALLOWLIST": "false",
                 "DEFAULT_MAX_COMPLETION_TOKENS": "2048",
                 "USE_PLACEHOLDER_MODE": "false",
                 "DEV_MODE": "false",
@@ -354,6 +358,99 @@ class ProxyTestCase(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             config.resolve_target_model("not-configured")
+
+    def test_codex_internal_model_falls_back_to_default_model_mapping(self):
+        public_model, target_model = self.config.resolve_target_model("codex-auto-review")
+
+        self.assertEqual(public_model, "codex-auto-review")
+        self.assertEqual(target_model, "internal-gpt")
+        self.assertAlmostEqual(self.config.calculate_cost("codex-auto-review", 1000, 1000), 3.0)
+
+    def test_codex_internal_model_alias_routes_to_configured_public_model(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MODEL_OPTIONS": "codex-gpt,codex-mini",
+                "MODEL_MAPPING": "codex-gpt=internal-gpt,codex-mini=internal-mini",
+                "MODEL_PRICING_USD_PER_1K": "codex-gpt=1/2,codex-mini=0.1/0.2",
+                "CODEX_MODEL_ALIASES": "codex-auto-review=codex-mini",
+            },
+            clear=False,
+        ):
+            config = Config()
+
+        public_model, target_model = config.resolve_target_model("codex-auto-review")
+
+        self.assertEqual(public_model, "codex-auto-review")
+        self.assertEqual(target_model, "internal-mini")
+        self.assertAlmostEqual(config.calculate_cost("codex-auto-review", 1000, 1000), 0.3)
+
+        table = config.get_model_pricing_table(
+            {
+                "codex-auto-review": {
+                    "requests": 1,
+                    "input_tokens": 1000,
+                    "output_tokens": 1000,
+                    "cost_usd": 0.3,
+                }
+            }
+        )
+        alias_row = next(row for row in table if row["model"] == "codex-auto-review")
+        self.assertEqual(alias_row["target_model"], "internal-mini")
+        self.assertEqual(alias_row["input_cost_per_1k"], 0.1)
+        self.assertEqual(alias_row["output_cost_per_1k"], 0.2)
+        self.assertEqual(alias_row["session_cost_usd"], 0.3)
+
+    def test_explicit_model_mapping_wins_over_codex_internal_alias(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MODEL_OPTIONS": "codex-gpt,codex-mini",
+                "MODEL_MAPPING": "codex-gpt=internal-gpt,codex-mini=internal-mini,codex-auto-review=internal-review",
+                "CODEX_MODEL_ALIASES": "codex-auto-review=codex-mini",
+            },
+            clear=False,
+        ):
+            config = Config()
+
+        self.assertEqual(
+            config.resolve_target_model("codex-auto-review"),
+            ("codex-auto-review", "internal-review"),
+        )
+
+    def test_strict_model_allowlist_allows_codex_internal_fallback(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MODEL_OPTIONS": "codex-gpt",
+                "MODEL_MAPPING": "codex-gpt=internal-gpt",
+                "STRICT_MODEL_ALLOWLIST": "true",
+            },
+            clear=False,
+        ):
+            config = Config()
+
+        self.assertEqual(
+            config.resolve_target_model("codex-auto-review"),
+            ("codex-auto-review", "internal-gpt"),
+        )
+
+    def test_codex_internal_fallback_can_be_disabled(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MODEL_OPTIONS": "codex-gpt",
+                "MODEL_MAPPING": "codex-gpt=internal-gpt",
+                "CODEX_INTERNAL_MODEL_FALLBACK": "none",
+            },
+            clear=False,
+        ):
+            config = Config()
+
+        self.assertEqual(
+            config.resolve_target_model("codex-auto-review"),
+            ("codex-auto-review", "codex-auto-review"),
+        )
 
     def test_default_model_options_include_requested_openai_models(self):
         with mock.patch.dict(

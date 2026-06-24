@@ -21,7 +21,7 @@ def _parse_csv(value: str) -> list[str]:
     return items
 
 
-def _parse_model_mapping(mapping_str: str) -> dict[str, str]:
+def _parse_model_mapping(mapping_str: str, env_name: str = "MODEL_MAPPING") -> dict[str, str]:
     """Parse model mapping from env: public-model=target-model,..."""
     mapping: dict[str, str] = {}
     for raw_pair in (mapping_str or "").split(","):
@@ -29,7 +29,7 @@ def _parse_model_mapping(mapping_str: str) -> dict[str, str]:
         if not pair:
             continue
         if "=" not in pair:
-            logger.warning("Ignoring invalid MODEL_MAPPING entry %r; expected public=target", pair)
+            logger.warning("Ignoring invalid %s entry %r; expected public=target", env_name, pair)
             continue
         public_model, target_model = pair.split("=", 1)
         public_model = public_model.strip()
@@ -254,6 +254,19 @@ class Config:
         if not self.default_model and self.model_options:
             self.default_model = self.model_options[0]
 
+        self.model_aliases = _parse_model_mapping(
+            _env_first("CODEX_MODEL_ALIASES", "MODEL_ALIASES"),
+            "CODEX_MODEL_ALIASES",
+        )
+        raw_codex_internal_fallback = _env_first(
+            "CODEX_INTERNAL_MODEL_FALLBACK",
+            default=self.default_model or "",
+        ).strip()
+        if raw_codex_internal_fallback.lower() in {"none", "false", "off", "pass_through"}:
+            self.codex_internal_model_fallback = None
+        else:
+            self.codex_internal_model_fallback = raw_codex_internal_fallback or None
+
         self.strict_model_allowlist = _parse_bool("STRICT_MODEL_ALLOWLIST")
         self.codex_provider_id = (
             _env_first("CODEX_PROVIDER_ID", default="codex-local-proxy").strip()
@@ -309,6 +322,36 @@ class Config:
         _, _, suffix = model.partition("/")
         return bool(suffix and suffix in self.model_options)
 
+    def _model_lookup_keys(self, model: str) -> list[str]:
+        lookup_keys = [model]
+        if "/" in model:
+            lookup_keys.append(model.split("/", 1)[1])
+        return lookup_keys
+
+    def _find_mapping(self, lookup_keys: list[str], mapping: dict[str, str]) -> tuple[str, str] | None:
+        for key in lookup_keys:
+            if key in mapping:
+                return key, mapping[key]
+        return None
+
+    def _is_codex_internal_model(self, lookup_keys: list[str]) -> bool:
+        return any("/" not in key and key.startswith("codex-") for key in lookup_keys)
+
+    def _map_visible_model_to_target(self, model: str) -> str:
+        lookup_keys = self._model_lookup_keys(model)
+        mapped = self._find_mapping(lookup_keys, self.model_mapping)
+        if mapped:
+            return mapped[1]
+        return lookup_keys[-1]
+
+    def _alias_or_internal_fallback_model(self, lookup_keys: list[str]) -> str | None:
+        alias = self._find_mapping(lookup_keys, self.model_aliases)
+        if alias:
+            return alias[1]
+        if self._is_codex_internal_model(lookup_keys):
+            return self.codex_internal_model_fallback
+        return None
+
     def resolve_target_model(self, requested_model: str | None) -> tuple[str, str]:
         """
         Resolve the model sent upstream.
@@ -321,21 +364,50 @@ class Config:
         if not public_model:
             raise ValueError("Request body must include a model, or DEFAULT_MODEL must be configured")
 
-        lookup_keys = [public_model]
-        if "/" in public_model:
-            lookup_keys.append(public_model.split("/", 1)[1])
+        lookup_keys = self._model_lookup_keys(public_model)
+        direct_mapping = self._find_mapping(lookup_keys, self.model_mapping)
+        fallback_model = self._alias_or_internal_fallback_model(lookup_keys)
 
-        if self.strict_model_allowlist and not any(key in self.model_options for key in lookup_keys):
+        if (
+            self.strict_model_allowlist
+            and not any(key in self.model_options for key in lookup_keys)
+            and not direct_mapping
+            and not fallback_model
+        ):
             raise ValueError(
                 f"Model {public_model!r} is not in MODEL_OPTIONS: {', '.join(self.model_options)}"
             )
 
-        for key in lookup_keys:
-            if key in self.model_mapping:
-                return key, self.model_mapping[key]
+        if direct_mapping:
+            return direct_mapping
+
+        if fallback_model:
+            return public_model, self._map_visible_model_to_target(fallback_model)
 
         # No mapping means the public model is already the upstream model name.
         return lookup_keys[-1], lookup_keys[-1]
+
+    def get_pricing_model(self, model: str | None, seen: set[str] | None = None) -> str:
+        """Return the configured pricing model to use for a Codex-facing model."""
+        public_model = (model or "").strip()
+        if not public_model:
+            return ""
+
+        seen = seen or set()
+        if public_model in seen:
+            return public_model
+        seen.add(public_model)
+
+        lookup_keys = self._model_lookup_keys(public_model)
+        for key in lookup_keys:
+            if key in self.model_pricing:
+                return key
+
+        fallback_model = self._alias_or_internal_fallback_model(lookup_keys)
+        if fallback_model and fallback_model != public_model:
+            return self.get_pricing_model(fallback_model, seen)
+
+        return lookup_keys[-1]
 
     def apply_completion_token_limit(self, request_payload: dict[str, Any]) -> None:
         """
@@ -375,7 +447,7 @@ class Config:
 
     def calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
         """Calculate request cost from configured USD-per-1K-token pricing."""
-        pricing = self.model_pricing.get(model)
+        pricing = self.model_pricing.get(self.get_pricing_model(model))
         if not pricing:
             return 0.0
 
@@ -383,29 +455,44 @@ class Config:
         output_cost = (output_tokens / 1_000) * pricing["output"]
         return input_cost + output_cost
 
+    def _model_pricing_row(
+        self,
+        model: str,
+        usage_by_model: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        pricing_model = self.get_pricing_model(model)
+        pricing = self.model_pricing.get(pricing_model, {})
+        usage = usage_by_model.get(model, {})
+        input_tokens = int(usage.get("input_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or 0)
+        try:
+            _, target_model = self.resolve_target_model(model)
+        except ValueError:
+            target_model = self.model_mapping.get(model, model)
+        return {
+            "model": model,
+            "target_model": target_model,
+            "input_cost_per_1k": pricing.get("input"),
+            "output_cost_per_1k": pricing.get("output"),
+            "configured": pricing_model in self.model_pricing,
+            "session_requests": int(usage.get("requests") or 0),
+            "session_input_tokens": input_tokens,
+            "session_output_tokens": output_tokens,
+            "session_total_tokens": input_tokens + output_tokens,
+            "session_cost_usd": float(usage.get("cost_usd") or 0.0),
+        }
+
     def get_model_pricing_table(self, usage_by_model: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         """Return model pricing and mapping rows for dashboard display."""
         rows = []
         usage_by_model = usage_by_model or {}
+        included_models = set()
         for model in self.model_options:
-            pricing = self.model_pricing.get(model, {})
-            usage = usage_by_model.get(model, {})
-            input_tokens = int(usage.get("input_tokens") or 0)
-            output_tokens = int(usage.get("output_tokens") or 0)
-            rows.append(
-                {
-                    "model": model,
-                    "target_model": self.model_mapping.get(model, model),
-                    "input_cost_per_1k": pricing.get("input"),
-                    "output_cost_per_1k": pricing.get("output"),
-                    "configured": model in self.model_pricing,
-                    "session_requests": int(usage.get("requests") or 0),
-                    "session_input_tokens": input_tokens,
-                    "session_output_tokens": output_tokens,
-                    "session_total_tokens": input_tokens + output_tokens,
-                    "session_cost_usd": float(usage.get("cost_usd") or 0.0),
-                }
-            )
+            rows.append(self._model_pricing_row(model, usage_by_model))
+            included_models.add(model)
+        for model in sorted(usage_by_model):
+            if model not in included_models:
+                rows.append(self._model_pricing_row(model, usage_by_model))
         return rows
 
     def is_oauth_configured(self) -> bool:
@@ -487,6 +574,8 @@ class Config:
             "duplicate_request_ttl_seconds": self.duplicate_request_ttl_seconds,
             "model_options": self.get_public_model_names(),
             "model_mapping": self.model_mapping,
+            "model_aliases": self.model_aliases,
+            "codex_internal_model_fallback": self.codex_internal_model_fallback,
             "model_pricing": self.model_pricing,
             "model_pricing_unit": self.model_pricing_unit,
             "model_pricing_table": self.get_model_pricing_table(),

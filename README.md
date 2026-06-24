@@ -124,6 +124,12 @@ AUTO_OPEN_BROWSER=true
 # launcher creates ~/.codex/codex-launcher/proxy_token for Codex Desktop auth.
 CODEX_PROXY_ACCESS_TOKEN=
 CODEX_DASHBOARD_ACCESS_TOKEN=
+
+# Optional hidden Codex helper model routing. Leave blank to route unknown
+# codex-* helper models, such as codex-auto-review, through DEFAULT_MODEL.
+# Example: CODEX_MODEL_ALIASES=codex-auto-review=gpt-5.4-mini
+CODEX_MODEL_ALIASES=
+CODEX_INTERNAL_MODEL_FALLBACK=
 ```
 
 Do not add `CODEX_TARGET_ENDPOINT` or `CODEX_TARGET_API_KEY` for the normal work-machine setup. Leaving those unset makes the Codex launcher inherit the existing direct `TARGET_ENDPOINT`, `TARGET_API_KEY` if present, `OAUTH_*`, `SKIP_SSL_VERIFY`, timeout, SSL, and rbc_security behavior from the copied env.
@@ -131,6 +137,8 @@ Do not add `CODEX_TARGET_ENDPOINT` or `CODEX_TARGET_API_KEY` for the normal work
 The Codex launcher also inherits the existing `MODEL_OPTIONS`, `OPENAI_MODEL_OPTIONS`, `DEFAULT_MODEL`, `MODEL_MAPPING`, and pricing values. Only set `CODEX_MODEL_OPTIONS` or `CODEX_DEFAULT_MODEL` if you intentionally want Codex Desktop to see a different model list/default than the existing launcher.
 
 Make sure `MODEL_MAPPING` contains entries for every model Codex will expose. If the existing mapping does not include your chosen default model, either add its internal mapping or set `DEFAULT_MODEL` to a model that is already mapped.
+
+Codex Desktop can also send hidden helper model IDs that are not exposed in `/v1/models`. The observed local cache entry is `codex-auto-review`, described by Codex as the automatic approval review model. Official Codex docs expose stable config keys such as `model`, `review_model`, `model_provider`, and `model_providers`, but they do not document `codex-auto-review` as a normal selectable model. The launcher handles this defensively: an explicit `MODEL_MAPPING` entry wins, `CODEX_MODEL_ALIASES` can map hidden slugs to visible model IDs, and otherwise unknown `codex-*` IDs are routed through `CODEX_INTERNAL_MODEL_FALLBACK`, which defaults to `DEFAULT_MODEL`. Set `CODEX_INTERNAL_MODEL_FALLBACK=none` only if you want unknown `codex-*` model IDs passed upstream unchanged.
 
 Only use this alternative if you intentionally want to chain through another local proxy:
 
@@ -147,6 +155,7 @@ CODEX_TARGET_API_KEY=<other-local-proxy-token>
 - `MODEL_OPTIONS`, `OPENAI_MODEL_OPTIONS`, `DEFAULT_MODEL`
 - Optional overrides: `CODEX_MODEL_OPTIONS`, `CODEX_DEFAULT_MODEL`
 - `MODEL_MAPPING`, `MODEL_PRICING_USD_PER_1K`
+- `CODEX_MODEL_ALIASES`, `CODEX_INTERNAL_MODEL_FALLBACK`
 - `CODEX_HOME`, `CODEX_CONFIG_PATH`, `CODEX_PROXY_TOKEN_FILE`
 - `CODEX_PROVIDER_ID`, `CODEX_PROVIDER_NAME`, `CODEX_APP_PATH`
 - `AUTO_APPLY_CODEX_CONFIG`, `AUTO_RESTART_CODEX_DESKTOP`, `AUTO_OPEN_BROWSER`
