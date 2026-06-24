@@ -72,6 +72,22 @@ CODEX_UPSTREAM_WIRE_API=responses
 TARGET_ENDPOINT=<native Responses upstream /v1 endpoint>
 ```
 
+Before switching the launcher to native mode, test the upstream directly with the copied `src/.env`:
+
+```bash
+./test-responses.sh
+```
+
+Optional checks:
+
+```bash
+./test-responses.sh --stream
+./test-responses.sh --dry-run
+./test-responses.sh --local-proxy
+```
+
+The default test calls `TARGET_ENDPOINT/responses` directly with the same OAuth, SSL/rbc_security, timeout, model mapping, and target API key behavior used by the launcher. `--local-proxy` calls the running local proxy at `/v1/responses` using the local proxy token.
+
 The Chat Completions adapter supports text, instructions, function tools, function-call outputs, `max_output_tokens`, model mapping, usage extraction, non-streaming responses, streaming text deltas, and streaming function-call deltas. Hosted built-in Responses tools such as web/file search are rejected with an OpenAI-shaped error unless native Responses mode is enabled.
 
 ## Work Machine Env
